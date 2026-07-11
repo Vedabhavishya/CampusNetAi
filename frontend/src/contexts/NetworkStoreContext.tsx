@@ -606,6 +606,56 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => clearInterval(interval);
   }, [devices, automationRules]);
 
+  // --- LOCAL BACKEND DATA SYNC LOOP ---
+  useEffect(() => {
+    let active = true;
+    
+    const syncBackend = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/v1/devices');
+        if (res.ok && active) {
+          const devData = await res.json();
+          if (devData && devData.length > 0) {
+            setDevices(devData);
+          }
+        }
+        
+        const cliRes = await fetch('http://localhost:8000/api/v1/clients');
+        if (cliRes.ok && active) {
+          const cliData = await cliRes.json();
+          if (cliData) setClients(cliData);
+        }
+        
+        const vlanRes = await fetch('http://localhost:8000/api/v1/vlans');
+        if (vlanRes.ok && active) {
+          const vlanData = await vlanRes.json();
+          if (vlanData) setVlans(vlanData);
+        }
+        
+        const leaseRes = await fetch('http://localhost:8000/api/v1/dhcp/leases');
+        if (leaseRes.ok && active) {
+          const leaseData = await leaseRes.json();
+          if (leaseData) setDhcpLeases(leaseData);
+        }
+
+        const alertRes = await fetch('http://localhost:8000/api/v1/alerts');
+        if (alertRes.ok && active) {
+          const alertData = await alertRes.json();
+          if (alertData) setAlerts(alertData);
+        }
+      } catch (err) {
+        // Backend offline fallback - keep using local memory
+      }
+    };
+
+    syncBackend();
+    const syncInterval = setInterval(syncBackend, 5000);
+    return () => {
+      active = false;
+      clearInterval(syncInterval);
+    };
+  }, []);
+
   // AI Insights generation loop
   useEffect(() => {
     // Check AP utilization counts

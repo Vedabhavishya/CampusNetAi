@@ -26,6 +26,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import asyncio
+from .services.collectors import collector_registry
+
+async def poll_devices_periodically():
+    while True:
+        db = SessionLocal()
+        try:
+            devices = db.query(DbDevice).all()
+            for dev in devices:
+                try:
+                    collector = collector_registry.get_collector(dev.type)
+                    status_data = collector.collect_status(dev.ip_address, dev.mac_address, dev.config)
+                    
+                    dev.status = status_data.get("status", dev.status)
+                    dev.health_score = status_data.get("health_score", dev.health_score)
+                    dev.cpu_usage = status_data.get("cpu_usage", dev.cpu_usage)
+                    dev.memory_usage = status_data.get("memory_usage", dev.memory_usage)
+                    dev.uptime = status_data.get("uptime", dev.uptime)
+                    
+                    if "telemetry" in status_data and "radios" in status_data["telemetry"]:
+                        radios = status_data["telemetry"]["radios"]
+                        total_clients = sum(r.get("active_clients", 0) for r in radios.values())
+                        dev.clients_count = total_clients
+                except Exception as ex:
+                    print(f"[Polling Daemon Error] Failed to update device {dev.name}: {ex}")
+            db.commit()
+        except Exception as e:
+            print(f"[Polling Daemon Database Error] {e}")
+        finally:
+            db.close()
+        
+        await asyncio.sleep(15)  # Poll every 15 seconds
+
 # Initialize seed data
 @app.on_event("startup")
 def startup_event():
@@ -37,6 +70,9 @@ def startup_event():
         print(f"Warning: Telemetry seeding failed: {e}")
     finally:
         db.close()
+    
+    # Start the local network polling task
+    asyncio.create_task(poll_devices_periodically())
 
 # Include API Router
 app.include_router(api_router, prefix=settings.API_STR)
