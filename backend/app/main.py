@@ -45,6 +45,58 @@ async def poll_devices_periodically():
                     dev.memory_usage = status_data.get("memory_usage", dev.memory_usage)
                     dev.uptime = status_data.get("uptime", dev.uptime)
                     
+                    # Map real telemetry config properties for physical devices
+                    if "telemetry" in status_data:
+                        telemetry = status_data["telemetry"]
+                        current_config = dev.config or {}
+                        
+                        # Routes mapping
+                        if "routes" in telemetry:
+                            current_config["routingTable"] = [
+                                {
+                                    "destination": r["destination"],
+                                    "gateway": r["gateway"],
+                                    "interface": r["interface"]
+                                }
+                                for r in telemetry["routes"]
+                            ]
+                        
+                        # Interfaces mapping
+                        if "interfaces" in telemetry:
+                            if "interfaces" not in current_config:
+                                current_config["interfaces"] = {}
+                            for i in telemetry["interfaces"]:
+                                iface_name = i["interface"]
+                                current_config["interfaces"][iface_name] = {
+                                    "enabled": i["admin"] == "up",
+                                    "link": i["link"],
+                                    "ip": i["ip"],
+                                    "speed": "1000Mbps"
+                                }
+                        
+                        # Zones mapping
+                        if "zones" in telemetry:
+                            current_config["securityZones"] = telemetry["zones"]
+                        
+                        # Policies mapping
+                        if "policies" in telemetry:
+                            current_config["firewallPolicies"] = [
+                                {
+                                    "id": f"pol-{idx}",
+                                    "name": p["policyName"],
+                                    "srcZone": p["fromZone"],
+                                    "destZone": p["toZone"],
+                                    "service": "Any",
+                                    "action": "permit" if "permit" in p["state"].lower() else "deny",
+                                    "enabled": p["state"] == "enabled" or p["state"] == "active"
+                                }
+                                for idx, p in enumerate(telemetry["policies"], start=1)
+                            ]
+                            
+                        from sqlalchemy.orm.attributes import flag_modified
+                        dev.config = current_config
+                        flag_modified(dev, "config")
+
                     if "telemetry" in status_data and "radios" in status_data["telemetry"]:
                         radios = status_data["telemetry"]["radios"]
                         total_clients = sum(r.get("active_clients", 0) for r in radios.values())
@@ -57,7 +109,7 @@ async def poll_devices_periodically():
         finally:
             db.close()
         
-        await asyncio.sleep(15)  # Poll every 15 seconds
+        await asyncio.sleep(5)  # Poll every 5 seconds
 
 # Initialize seed data
 @app.on_event("startup")
