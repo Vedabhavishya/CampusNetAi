@@ -12,12 +12,12 @@ from ..core.database import get_db
 from ..core.security import verify_password, create_access_token
 from ..models.models import DbUser, DbDevice, DbClient, DbVlan, DbDhcpLease, DbAlert, DbInsight
 from ..schemas.schemas import Token, LoginRequest, DeviceOut, DeviceConfigUpdate, DeviceOnboard, ClientOut, VlanOut, VlanCreate, DhcpLeaseOut, DhcpReservationCreate, AlertOut, InsightOut, AiQueryRequest, AiQueryResponse
-from ..services.collectors import collector_registry
+from ..services.collectors import collector_registry, telemetry_cache
 from ..services.ai_engine import local_ai_engine
 
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_STR}/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_STR}/login", auto_error=False)
 
 # --- AUTHENTICATION DEPENDENCY ---
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> DbUser:
@@ -90,31 +90,161 @@ def login_for_access_token(payload: LoginRequest, db: Session = Depends(get_db))
 def get_devices(db: Session = Depends(get_db), current_user: DbUser = Depends(get_current_user)):
     devices = db.query(DbDevice).all()
     
-    # In a real environment, we would iterate devices and trigger live status checks:
-    # for dev in devices:
-    #     collector = collector_registry.get_collector(dev.type)
-    #     status_data = collector.collect_status(dev.ip_address, dev.mac_address)
-    #     # update DB fields dynamically...
-    
-    return [
-        DeviceOut(
-            id=d.id,
-            name=d.name,
-            type=d.type,
-            ipAddress=d.ip_address,
-            macAddress=d.mac_address,
-            status=d.status,
-            model=d.model,
-            version=d.version,
-            uptime=d.uptime,
-            healthScore=d.health_score,
-            cpuUsage=d.cpu_usage,
-            memoryUsage=d.memory_usage,
-            clientsCount=d.clients_count,
-            config=d.config
-        )
-        for d in devices
-    ]
+    response_devices = []
+    for d in devices:
+        cached = telemetry_cache.get(d.id)
+        if cached:
+            status = cached.get("status", d.status)
+            health_score = cached.get("health_score", d.health_score)
+            cpu_usage = cached.get("cpu_usage", d.cpu_usage)
+            memory_usage = cached.get("memory_usage", d.memory_usage)
+            uptime = cached.get("uptime", d.uptime)
+            model = cached.get("model", d.model)
+            version = cached.get("version", d.version)
+            clients_count = d.clients_count
+            
+            config = d.config or {}
+            if "telemetry" in cached and cached["telemetry"] is not None:
+                telemetry = cached["telemetry"]
+                config = {**config}
+                
+                # Routes mapping
+                if "routes" in telemetry:
+                    config["routingTable"] = [
+                        {
+                            "destination": r["destination"],
+                            "gateway": r["gateway"],
+                            "interface": r["interface"]
+                        }
+                        for r in telemetry["routes"]
+                    ]
+                
+                # Interfaces mapping
+                if "interfaces" in telemetry:
+                    if "interfaces" not in config:
+                        config["interfaces"] = {}
+                    for i in telemetry["interfaces"]:
+                        iface_name = i["interface"]
+                        config["interfaces"][iface_name] = {
+                            "enabled": i["admin"] == "up",
+                            "link": i["link"],
+                            "ip": i["ip"],
+                            "speed": "1000Mbps"
+                        }
+                
+                # Zones mapping
+                if "zones" in telemetry:
+                    config["securityZones"] = telemetry["zones"]
+                
+                # Policies mapping
+                if "policies" in telemetry:
+                    config["firewallPolicies"] = [
+                        {
+                            "id": f"pol-{idx}",
+                            "name": p["policyName"],
+                            "srcZone": p["fromZone"],
+                            "destZone": p["toZone"],
+                            "service": "Any",
+                            "action": "permit" if "permit" in p["state"].lower() else "deny",
+                            "enabled": p["state"] == "enabled" or p["state"] == "active"
+                        }
+                        for idx, p in enumerate(telemetry["policies"], start=1)
+                    ]
+                
+                # Update clients count if radios telemetry exists
+                if "radios" in telemetry:
+                    radios = telemetry["radios"]
+                    clients_count = sum(r.get("active_clients", 0) for r in radios.values())
+
+            # Check if connected is False (unreachable offline state)
+            if cached.get("connected") is False:
+                status = "offline"
+                health_score = 0
+                cpu_usage = 0
+                memory_usage = 0
+
+            response_devices.append(
+                DeviceOut(
+                    id=d.id,
+                    name=d.name,
+                    type=d.type,
+                    ipAddress=d.ip_address,
+                    macAddress=d.mac_address,
+                    status=status,
+                    model=model,
+                    version=version,
+                    uptime=uptime,
+                    healthScore=health_score,
+                    cpuUsage=cpu_usage,
+                    memoryUsage=memory_usage,
+                    clientsCount=clients_count,
+                    config=config
+                )
+            )
+        else:
+            response_devices.append(
+                DeviceOut(
+                    id=d.id,
+                    name=d.name,
+                    type=d.type,
+                    ipAddress=d.ip_address,
+                    macAddress=d.mac_address,
+                    status=d.status,
+                    model=d.model,
+                    version=d.version,
+                    uptime=d.uptime,
+                    healthScore=d.health_score,
+                    cpuUsage=d.cpu_usage,
+                    memoryUsage=d.memory_usage,
+                    clientsCount=d.clients_count,
+                    config=d.config
+                )
+            )
+    return response_devices
+
+@router.get("/inventory")
+def get_inventory(db: Session = Depends(get_db), current_user: DbUser = Depends(get_current_user)):
+    """
+    Returns inventory details for all devices.
+    Uses cached inventory if available, falling back to database values.
+    """
+    devices = db.query(DbDevice).all()
+    inventory_list = []
+    for d in devices:
+        cached = telemetry_cache.get(d.id)
+        if cached and "inventory" in cached:
+            inv = cached["inventory"]
+            inventory_list.append({
+                "id": d.id,
+                "name": d.name,
+                "type": d.type,
+                "ip_address": d.ip_address,
+                "mac_address": d.mac_address,
+                "hostname": inv.get("hostname", d.name),
+                "serial": inv.get("serial", "N/A"),
+                "model": inv.get("model", d.model),
+                "junos": inv.get("junos", d.version),
+                "interfaces": inv.get("interfaces", len(d.config.get("interfaces", {})) if d.config else 0),
+                "device_type": d.type.capitalize(),
+                "vendor": inv.get("vendor", "Juniper" if "juniper" in d.model.lower() else "Unknown")
+            })
+        else:
+            vendor = "Juniper" if "juniper" in d.model.lower() else "Unknown"
+            inventory_list.append({
+                "id": d.id,
+                "name": d.name,
+                "type": d.type,
+                "ip_address": d.ip_address,
+                "mac_address": d.mac_address,
+                "hostname": d.name,
+                "serial": "N/A",
+                "model": d.model,
+                "junos": d.version,
+                "interfaces": len(d.config.get("interfaces", {})) if d.config and "interfaces" in d.config else 0,
+                "device_type": d.type.capitalize(),
+                "vendor": vendor
+            })
+    return inventory_list
 
 @router.put("/devices/{device_id}", response_model=DeviceOut)
 def update_device_config(device_id: str, config_update: DeviceConfigUpdate, db: Session = Depends(get_db), current_user: DbUser = Depends(allow_write)):
