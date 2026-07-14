@@ -59,6 +59,14 @@ class DeviceOut(BaseModel):
     memoryUsage: int
     clientsCount: int
     config: Optional[Dict[str, Any]] = None
+    
+    # Enriched telemetry fields
+    collector: Optional[Dict[str, Any]] = None
+    inventory: Optional[Dict[str, Any]] = None
+    health: Optional[Dict[str, Any]] = None
+    telemetry: Optional[Dict[str, Any]] = None
+    performance: Optional[Dict[str, Any]] = None
+    raw: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True

@@ -1,3 +1,4 @@
+from collections import deque
 import threading
 import time
 
@@ -7,7 +8,18 @@ class TelemetryCache:
     """
     def __init__(self):
         self._cache = {}
+        self._history = {} # {device_id: deque(maxlen=10)}
         self._lock = threading.Lock()
+
+    def add_history(self, device_id: str, entry: dict):
+        with self._lock:
+            if device_id not in self._history:
+                self._history[device_id] = deque(maxlen=10)
+            self._history[device_id].append(entry)
+
+    def get_history(self, device_id: str) -> list:
+        with self._lock:
+            return list(self._history.get(device_id, []))
 
     def set(self, device_id: str, data: dict):
         with self._lock:

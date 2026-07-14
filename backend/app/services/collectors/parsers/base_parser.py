@@ -32,3 +32,19 @@ class BaseParser(ABC):
     @abstractmethod
     def parse_sessions_arp(self, sessions_out: str, arp_out: str) -> dict:
         pass
+
+    @abstractmethod
+    def parse_vlans(self, vlans_out: str) -> list:
+        pass
+
+    @abstractmethod
+    def parse_mac_table(self, mac_table_out: str) -> list:
+        pass
+
+    @abstractmethod
+    def parse_lldp(self, lldp_out: str) -> list:
+        pass
+
+    @abstractmethod
+    def parse_interface_stats(self, interface_stats_out: str) -> dict:
+        pass

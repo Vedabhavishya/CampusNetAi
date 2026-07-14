@@ -45,7 +45,7 @@ def seed_database(db: Session):
                 id="dev-cs-1",
                 name="CN-CS-01-SPINE",
                 type="core_switch",
-                ip_address="10.10.10.2",
+                ip_address="192.168.99.2",
                 mac_address="00:0B:82:22:B4:02",
                 status="online",
                 model="Juniper EX4400-24T",
@@ -61,11 +61,11 @@ def seed_database(db: Session):
                 id="dev-as-1",
                 name="CN-AS-01-FLOOR1",
                 type="access_switch",
-                ip_address="10.10.10.10",
+                ip_address="192.168.99.3",
                 mac_address="00:0B:82:33:C5:10",
                 status="online",
-                model="Juniper EX2300-48P",
-                version="JunOS 21.2R3.5",
+                model="Juniper EX2300-C-12P",
+                version="JunOS 21.4R3-S7.6",
                 uptime="30 days, 12 hours",
                 health_score=95,
                 cpu_usage=22,
@@ -140,6 +140,20 @@ def seed_database(db: Session):
         ]
         db.add_all(devices)
         db.commit()
+    else:
+        # Update existing dev-as-1 record with correct IP and hardware metadata
+        dev = db.query(DbDevice).filter(DbDevice.id == "dev-as-1").first()
+        if dev:
+            dev.ip_address = "192.168.99.3"
+            dev.model = "Juniper EX2300-C-12P"
+            dev.version = "JunOS 21.4R3-S7.6"
+            db.commit()
+            
+        # Update existing dev-cs-1 record with correct IP address
+        dev_cs = db.query(DbDevice).filter(DbDevice.id == "dev-cs-1").first()
+        if dev_cs:
+            dev_cs.ip_address = "192.168.99.2"
+            db.commit()
 
     # 3. Seed Clients
     if db.query(DbClient).count() == 0:

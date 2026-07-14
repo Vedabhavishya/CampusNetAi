@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Table } from '../components/Table';
@@ -11,7 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { NetworkDevice, AuditLog, NetworkAlert } from '../types';
 import { 
   Shield, Plus, AlertTriangle, ShieldCheck, Play, ArrowUpRight, 
-  Trash2, Settings, Edit3, Activity, Network, Key, ListFilter, FileText, History, RefreshCw 
+  Trash2, Settings, Edit3, Activity, Network, Key, ListFilter, FileText, History, RefreshCw, Layers 
 } from 'lucide-react';
 
 interface SecurityRule {
@@ -54,12 +54,22 @@ export const FirewallManager: React.FC = () => {
     rollbackConfiguration 
   } = useNetworkStore();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'interfaces' | 'policies' | 'nat' | 'vpn' | 'dhcp' | 'dns' | 'routing' | 'logs' | 'backup' | 'firmware' | 'system'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'interfaces' | 'policies' | 'nat' | 'vpn' | 'dhcp' | 'dns' | 'routing' | 'logs' | 'backup' | 'firmware' | 'system' | 'telemetry'>('overview');
 
   // Load Firewall device
   const device = useMemo(() => {
     return devices.find(d => d.type === 'firewall') || null;
   }, [devices]);
+
+  useEffect(() => {
+    if (device?.health) {
+      const isConnected = device.health.connected;
+      const status = device.health.status;
+      if ((!isConnected && status === 'online') || (isConnected && status === 'offline')) {
+        console.warn(`[Firewall Health Consistency] Warning: Device "${device.name}" has inconsistent health metadata (connected=${isConnected}, status="${status}").`);
+      }
+    }
+  }, [device]);
 
   const isReadOnly = user?.role === 'Network Engineer';
 
@@ -428,6 +438,7 @@ export const FirewallManager: React.FC = () => {
           { id: 'overview', label: 'Overview', icon: <Activity className="h-4 w-4" /> },
           { id: 'interfaces', label: 'Interfaces', icon: <Network className="h-4 w-4" /> },
           { id: 'policies', label: 'Security Policies', icon: <Shield className="h-4 w-4" /> },
+          { id: 'telemetry', label: 'Collector & Live Telemetry', icon: <Layers className="h-4 w-4" /> },
           { id: 'nat', label: 'NAT Forwarding', icon: <Plus className="h-4 w-4" /> },
           { id: 'vpn', label: 'IPSec VPN', icon: <Key className="h-4 w-4" /> },
           { id: 'dhcp', label: 'DHCP Status', icon: <ListFilter className="h-4 w-4" /> },
@@ -494,6 +505,121 @@ export const FirewallManager: React.FC = () => {
                 </div>
               </div>
             </Card>
+          </div>
+        )}
+
+        {activeTab === 'telemetry' && (
+          <div className="space-y-6 text-left text-xs font-semibold">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Health & Collector Metadata */}
+              <Card title="Collector & Health Metadata" className="space-y-3">
+                {device.collector ? (
+                  <>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Collector Name</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.name}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Collector Version</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.version}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Device Family</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.device_family}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Last Poll Timestamp</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.last_poll}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Poll Duration</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.poll_duration_ms} ms</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Commands Executed / Failed</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">
+                        {device.collector.commands_executed} / {device.collector.commands_failed}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-slate-400">No collector metadata available.</div>
+                )}
+                {device.health && (
+                  <>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10 pt-2 font-bold text-slate-700 dark:text-slate-300">
+                      <span>Connection Status</span>
+                      <span className={device.health.connected ? 'text-emerald-500 text-right' : 'text-rose-500 text-right'}>
+                        {device.health.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">SSH Latency</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.health.ssh_latency_ms} ms</span>
+                    </div>
+                  </>
+                )}
+              </Card>
+
+              {/* Inventory Metadata */}
+              <Card title="Live Inventory details" className="space-y-3">
+                {device.inventory ? (
+                  <>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Hostname</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hostname}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Vendor / Family</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.vendor} {device.inventory.family}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Model</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.model}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Serial Number</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.serial}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Software Version</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.software_version}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Hardware Revision</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hardware_revision}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1">
+                      <span className="text-slate-400">System Uptime</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.uptime}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-slate-400">No inventory details available.</div>
+                )}
+              </Card>
+            </div>
+
+            {/* Raw Outputs */}
+            {device.raw && Object.keys(device.raw).length > 0 && (
+              <Card title="Raw CLI commands Outcomes" description="Expand to view exact outputs returned from the live device:">
+                <div className="space-y-2 mt-2 font-mono text-[11px]">
+                  {Object.entries(device.raw).map(([cmd, res]: [string, any]) => (
+                    <details key={cmd} className="bg-slate-500/5 rounded-lg border border-slate-200/10 overflow-hidden font-mono">
+                      <summary className="px-4 py-2 font-bold cursor-pointer hover:bg-slate-500/10 flex justify-between select-none">
+                        <span>{cmd}</span>
+                        <span className={res.success ? 'text-emerald-500' : 'text-rose-500'}>
+                          {res.success ? 'SUCCESS' : 'FAILED'}
+                        </span>
+                      </summary>
+                      <div className="p-3 border-t border-slate-200/10 whitespace-pre overflow-x-auto max-h-48 text-[10px] text-slate-650 bg-slate-900/50">
+                        {res.output || res.error || 'Empty Output.'}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </Card>
+            )}
           </div>
         )}
 

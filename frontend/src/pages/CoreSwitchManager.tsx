@@ -29,7 +29,7 @@ export const CoreSwitchManager: React.FC = () => {
     runProvisioningTask 
   } = useNetworkStore();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'vlans' | 'interfaces' | 'routing' | 'lags' | 'stp'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'vlans' | 'interfaces' | 'routing' | 'lags' | 'stp' | 'telemetry' | 'mac_lldp'>('overview');
   
   // Load Core Switch device
   const device = useMemo(() => {
@@ -37,6 +37,7 @@ export const CoreSwitchManager: React.FC = () => {
   }, [devices]);
 
   const isReadOnly = user?.role === 'Network Engineer';
+  const isLiveDevice = !!device?.telemetry;
 
   // STP States
   const [stpMode, setStpMode] = useState<'RSTP' | 'MSTP'>('RSTP');
@@ -62,29 +63,136 @@ export const CoreSwitchManager: React.FC = () => {
   // Reboot state
   const [isRebooting, setIsRebooting] = useState(false);
 
+  // Human-readable format utilities
+  const formatThroughput = (bps: number | undefined): string => {
+    if (bps === undefined || isNaN(bps)) return '--';
+    if (bps >= 1000000000) return (bps / 1000000000).toFixed(2) + ' Gbps';
+    if (bps >= 1000000) return (bps / 1000000).toFixed(2) + ' Mbps';
+    if (bps >= 1000) return (bps / 1000).toFixed(2) + ' Kbps';
+    return bps + ' bps';
+  };
+
+  const formatBytes = (bytes: number | undefined): string => {
+    if (bytes === undefined || isNaN(bytes)) return '--';
+    if (bytes >= 1000000000) return (bytes / 1000000000).toFixed(2) + ' GB';
+    if (bytes >= 1000000) return (bytes / 1000000).toFixed(2) + ' MB';
+    if (bytes >= 1000) return (bytes / 1000).toFixed(2) + ' KB';
+    return bytes + ' B';
+  };
+
+  // Dynamic VLAN rows computed from telemetry.vlans
+  const vlanData = useMemo(() => {
+    if (device && device.telemetry && Array.isArray(device.telemetry.vlans)) {
+      return device.telemetry.vlans.map((v: any) => ({
+        id: v.vlan_id || v.id,
+        name: v.name || v.vlan_name,
+        memberCount: v.member_count !== undefined ? v.member_count : (v.members ? v.members.length : '--'),
+        subnet: v.subnet || '--',
+        dhcpRange: v.dhcpRange || v.dhcp_range || '--'
+      }));
+    }
+    // Fallback to global vlans for backward compatibility
+    if (Array.isArray(vlans)) {
+      return vlans.map((v: any) => ({
+        id: v.id,
+        name: v.name,
+        memberCount: v.memberCount !== undefined ? v.memberCount : '--',
+        subnet: v.subnet || '--',
+        dhcpRange: v.dhcpRange || '--'
+      }));
+    }
+    return [];
+  }, [device, vlans]);
+
+  // Dynamic ports configuration computed from telemetry.interfaces
+  const portsList = useMemo(() => {
+    if (device && device.telemetry && Array.isArray(device.telemetry.interfaces)) {
+      return device.telemetry.interfaces.map((i: any) => {
+        let assignedVlanStr = '--';
+        if (Array.isArray(device.telemetry.vlans)) {
+          const matchingVlan = device.telemetry.vlans.find((v: any) => 
+            Array.isArray(v.members) && v.members.some((m: string) => m.includes(i.interface))
+          );
+          if (matchingVlan) {
+            assignedVlanStr = `${matchingVlan.vlan_id || matchingVlan.id} (${matchingVlan.name || matchingVlan.vlan_name})`;
+          }
+        }
+        
+        let resolvedSpeed = i.speed;
+        if (!resolvedSpeed || resolvedSpeed === '--') {
+          let statsPort = device.telemetry?.port_statistics?.ports?.[i.interface];
+          if (!statsPort && i.interface.includes('.')) {
+            const baseInterface = i.interface.split('.')[0];
+            statsPort = device.telemetry?.port_statistics?.ports?.[baseInterface];
+          }
+          if (statsPort && statsPort.speed) resolvedSpeed = statsPort.speed;
+        }
+        if (resolvedSpeed && typeof resolvedSpeed === 'string') {
+          resolvedSpeed = resolvedSpeed.trim();
+          if (resolvedSpeed.toLowerCase() === '1000mbps') resolvedSpeed = '1000 Mbps';
+          if (resolvedSpeed.toLowerCase() === '10000mbps') resolvedSpeed = '10 Gbps';
+        }
+
+        return {
+          name: i.interface,
+          adminState: i.admin || 'up',
+          linkState: i.link || 'up',
+          speed: resolvedSpeed || '--',
+          vlan: assignedVlanStr
+        };
+      });
+    }
+    // Fallback to config interface list for mock devices
+    if (device && device.config && device.config.interfaces) {
+      return Object.entries(device.config.interfaces).map(([name, conf]: [string, any]) => ({
+        name,
+        adminState: conf.enabled ? 'up' : 'down',
+        linkState: conf.enabled ? 'up' : 'down',
+        speed: conf.speed || '1000Mbps',
+        vlan: conf.vlan !== undefined && conf.vlan !== 0 ? String(conf.vlan) : '--'
+      }));
+    }
+    return [];
+  }, [device]);
+
   // Derived core switch routes
   const routesList = useMemo(() => {
     if (!device) return [];
-    const list = (device.config as any).routingTable || [
-      { destination: '0.0.0.0/0', gateway: '10.10.10.1', interface: 'xe0' },
-      { destination: '10.10.20.0/24', gateway: 'Directly Connected', interface: 'vlan-20' },
-      { destination: '10.10.30.0/24', gateway: 'Directly Connected', interface: 'vlan-30' },
-      { destination: '10.10.40.0/24', gateway: 'Directly Connected', interface: 'vlan-40' }
-    ];
-    return list.map((r: any, idx: number) => ({
-      id: `rt-${idx}`,
-      ...r
-    }));
+    if (device.telemetry && Array.isArray(device.telemetry.routes)) {
+      return device.telemetry.routes.map((r: any, idx: number) => ({
+        id: `rt-${idx}`,
+        destination: r.destination,
+        gateway: r.gateway,
+        interface: r.interface
+      }));
+    }
+    // Fallback to config routing table if not live telemetry
+    if (device.config && Array.isArray(device.config.routingTable)) {
+      return device.config.routingTable.map((r: any, idx: number) => ({
+        id: `rt-conf-${idx}`,
+        destination: r.destination,
+        gateway: r.gateway,
+        interface: r.interface
+      }));
+    }
+    return [];
   }, [device]);
 
   // Derived Link Aggregations
   const lags = useMemo(() => {
-    return [
-      { id: 'lag-1', name: 'ae0 (Uplink to FW)', ports: ['xe-0/0/0', 'xe-0/0/1'], status: 'up', speed: '20 Gbps', mode: 'LACP', vlan: 10 },
-      { id: 'lag-2', name: 'ae1 (Downlink Floor 1)', ports: ['xe-0/1/0', 'xe-1/1/0'], status: 'up', speed: '20 Gbps', mode: 'LACP', vlan: 20 },
-      { id: 'lag-3', name: 'ae2 (Downlink Floor 2)', ports: ['xe-0/1/1', 'xe-1/1/1'], status: 'up', speed: '20 Gbps', mode: 'LACP', vlan: 20 }
-    ];
-  }, []);
+    if (device && device.telemetry && Array.isArray(device.telemetry.lag)) {
+      return device.telemetry.lag.map((l: any, idx: number) => ({
+        id: l.id || `lag-${idx}`,
+        name: l.name,
+        ports: l.ports || [],
+        status: l.status,
+        speed: l.speed,
+        mode: l.mode,
+        vlan: l.vlan
+      }));
+    }
+    return [];
+  }, [device]);
 
   if (!device) {
     return (
@@ -230,6 +338,8 @@ export const CoreSwitchManager: React.FC = () => {
           { id: 'overview', label: 'Overview & Diagnostics', icon: <Activity className="h-4 w-4" /> },
           { id: 'vlans', label: 'Trunk VLAN Profiles', icon: <Layers className="h-4 w-4" /> },
           { id: 'interfaces', label: 'Ports Configuration', icon: <Settings className="h-4 w-4" /> },
+          { id: 'telemetry', label: 'Collector & Live Telemetry', icon: <Layers className="h-4 w-4" /> },
+          { id: 'mac_lldp', label: 'MAC & LLDP Neighbors', icon: <Layers className="h-4 w-4" /> },
           { id: 'routing', label: 'Static Routes (L3)', icon: <GitCommit className="h-4 w-4" /> },
           { id: 'lags', label: 'Port aggregation (LAG)', icon: <Settings className="h-4 w-4" /> },
           { id: 'stp', label: 'Spanning Tree (STP)', icon: <Settings className="h-4 w-4" /> }
@@ -253,39 +363,108 @@ export const CoreSwitchManager: React.FC = () => {
       <div className="space-y-6">
         {activeTab === 'overview' && (
           <div className="space-y-6">
+            {(!device.collector || !device.telemetry) && (
+              <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-xl p-3.5 text-xs text-left font-medium">
+                Live telemetry unavailable. Using cached settings.
+              </div>
+            )}
+            
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Virtual Chassis Card */}
               <Card title="Virtual Chassis Configuration" description="Multi-member active switch stack">
-                <div className="flex items-center space-x-3 mt-3 text-left">
-                  <div className="h-10 w-10 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-sm font-bold font-mono shrink-0">
-                    2x
+                <div className="mt-3 text-left text-xs font-sans text-slate-700 dark:text-slate-300">
+                  {device.telemetry?.virtual_chassis ? (
+                    <div className="flex items-center space-x-3">
+                      <div className="h-10 w-10 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-sm font-bold font-mono shrink-0">
+                        {device.telemetry.virtual_chassis.members_count || 1}x
+                      </div>
+                      <div className="space-y-0.5">
+                        <p className="font-semibold">Stack Status: {device.telemetry.virtual_chassis.status || 'ACTIVE'}</p>
+                        <p className="text-[10px] text-slate-400">
+                          Master: {device.telemetry.virtual_chassis.master || '--'} | Backup: {device.telemetry.virtual_chassis.backup || '--'}
+                        </p>
+                        <p className="text-[9px] text-slate-500">Mode: {device.telemetry.virtual_chassis.mode || '--'}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 font-medium py-3 text-center">
+                      No Virtual Chassis information available.
+                    </p>
+                  )}
+                </div>
+              </Card>
+
+              {/* Aggregate Link Traffic Card */}
+              <Card title="Aggregate Link Traffic" description="Throughput distribution across interfaces">
+                <div className="mt-2 text-left text-xs font-sans space-y-1 text-slate-700 dark:text-slate-300">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Current Throughput:</span>
+                    <span className="font-mono font-bold">
+                      {device.telemetry?.port_statistics?.aggregate?.switch_throughput_bps !== undefined
+                        ? formatThroughput(device.telemetry.port_statistics.aggregate.switch_throughput_bps)
+                        : '--'}
+                    </span>
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Stack Status: ACTIVE</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Master: Member 0 | Backup: Member 1</p>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Average Utilization:</span>
+                    <span className="font-mono font-semibold">
+                      {device.telemetry?.port_statistics?.aggregate?.average_utilization !== undefined
+                        ? `${device.telemetry.port_statistics.aggregate.average_utilization.toFixed(2)}%`
+                        : '--'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Total RX:</span>
+                    <span className="font-mono">
+                      {device.telemetry?.port_statistics?.aggregate?.total_rx !== undefined
+                        ? formatBytes(device.telemetry.port_statistics.aggregate.total_rx)
+                        : '--'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Total TX:</span>
+                    <span className="font-mono">
+                      {device.telemetry?.port_statistics?.aggregate?.total_tx !== undefined
+                        ? formatBytes(device.telemetry.port_statistics.aggregate.total_tx)
+                        : '--'}
+                    </span>
                   </div>
                 </div>
               </Card>
 
-              <Card title="Aggregate Link Traffic" description="Throughput distribution across LAGs">
-                <div className="mt-3 text-left">
-                  <p className="text-xs text-slate-400">ae0 throughput load</p>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <span className="font-mono text-sm font-bold text-slate-800 dark:text-slate-200">12.4 Gbps / 20 Gbps</span>
-                    <span className="text-[10px] text-emerald-500 font-semibold">(Healthy load)</span>
-                  </div>
-                </div>
-              </Card>
-
-              <Card title="STP Root Bridge status" description="RSTP topology diagnostics">
-                <div className="mt-3 text-xs text-slate-700 dark:text-slate-300 flex flex-col space-y-1 text-left">
-                  <p className="flex justify-between">
-                    <span className="text-slate-400">Root Bridge ID:</span>
-                    <span className="font-mono font-semibold">32768.00:0B:82:22:B4:02</span>
-                  </p>
-                  <p className="flex justify-between mt-1">
-                    <span className="text-slate-400">Role:</span>
-                    <span className="text-emerald-500 font-semibold">This switch is the ROOT</span>
-                  </p>
+              {/* Spanning Tree Card */}
+              <Card title="STP Root Bridge status" description="Spanning Tree diagnostics">
+                <div className="mt-3 text-left text-xs font-sans text-slate-700 dark:text-slate-300">
+                  {device.telemetry?.stp ? (
+                    <div className="space-y-1">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Protocol:</span>
+                        <span className="font-mono font-semibold">{device.telemetry.stp.protocol || 'RSTP'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Bridge ID:</span>
+                        <span className="font-mono font-semibold">{device.telemetry.stp.bridge_id || '--'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Priority:</span>
+                        <span className="font-mono font-semibold">{device.telemetry.stp.priority || '32768'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Role:</span>
+                        <span className="font-semibold text-emerald-500">{device.telemetry.stp.role || 'Designated'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Root Status:</span>
+                        <span className={device.telemetry.stp.is_root ? 'text-emerald-500 font-semibold' : 'text-slate-400 font-semibold'}>
+                          {device.telemetry.stp.is_root ? 'This switch is the ROOT' : 'Not Root'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 font-medium py-3 text-center">
+                      No Spanning Tree telemetry available.
+                    </p>
+                  )}
                 </div>
               </Card>
             </div>
@@ -311,8 +490,13 @@ export const CoreSwitchManager: React.FC = () => {
                 <p className="text-xs text-slate-400">Define global broadcast domains mapped to routing interfaces.</p>
               </div>
               {!isReadOnly && (
-                <Button variant="primary" onClick={() => setIsAddVlanOpen(true)}>
-                  <Plus className="h-4 w-4 mr-1.5" /> Create VLAN
+                <Button 
+                  variant="primary" 
+                  onClick={() => setIsAddVlanOpen(true)}
+                  disabled={isLiveDevice}
+                  title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
+                >
+                  <Plus className="h-4 w-4 mr-1.5" /> {isLiveDevice ? 'Not Supported' : 'Create VLAN'}
                 </Button>
               )}
             </div>
@@ -322,23 +506,28 @@ export const CoreSwitchManager: React.FC = () => {
                 columns={[
                   { header: 'VLAN ID', accessor: 'id', sortable: true },
                   { header: 'Profile Name', accessor: 'name', sortable: true },
+                  { header: 'Members Count', accessor: 'memberCount' },
                   { header: 'IP Subnet Address', accessor: 'subnet', className: 'font-mono' },
                   { header: 'DHCP Pool Range', accessor: 'dhcpRange', className: 'font-mono' },
                   {
                     header: 'Actions',
-                    accessor: (row: Vlan) => (
+                    accessor: (row: any) => (
                       <div className="flex items-center justify-end gap-1.5">
                         <Button
                           variant="outline"
                           onClick={() => triggerRenameVlan(row)}
-                          className="p-1 h-8 w-8 flex items-center justify-center"
+                          className="p-1 h-8 w-8 flex items-center justify-center disabled:opacity-50"
+                          disabled={isLiveDevice}
+                          title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
                         >
                           <Edit3 className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           onClick={() => handleDeleteVlan(row.id)}
-                          className="p-1 h-8 w-8 flex items-center justify-center text-rose-500 hover:text-rose-700"
+                          className="p-1 h-8 w-8 flex items-center justify-center text-rose-500 hover:text-rose-700 disabled:opacity-50"
+                          disabled={isLiveDevice}
+                          title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -347,7 +536,7 @@ export const CoreSwitchManager: React.FC = () => {
                     className: 'text-right'
                   }
                 ]}
-                data={vlans}
+                data={vlanData}
               />
             </Card>
           </div>
@@ -359,40 +548,52 @@ export const CoreSwitchManager: React.FC = () => {
               <table className="min-w-full divide-y divide-slate-200/50 dark:divide-slate-800/50 text-xs font-mono">
                 <thead className="bg-slate-50/50 dark:bg-slate-900/50">
                   <tr>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Port Name</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Speed</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Assigned VLAN</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Action</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Interface Name</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Status</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Admin State</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Operational State</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Speed</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Assigned VLAN</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200/40 dark:divide-slate-800/40 bg-transparent text-slate-700 dark:text-slate-300">
-                  {Object.entries(device.config.interfaces || {}).map(([key, port]) => (
-                    <tr key={key}>
-                      <td className="px-6 py-4 font-bold">{key}</td>
-                      <td className="px-6 py-4">
-                        <StatusBadge status={port.enabled ? 'online' : 'offline'} />
+                  {portsList.map((port: any) => (
+                    <tr key={port.name}>
+                      <td className="px-6 py-4 font-bold text-left">{port.name}</td>
+                      <td className="px-6 py-4 text-left">
+                        <StatusBadge status={port.linkState === 'up' ? 'online' : 'offline'} />
                       </td>
-                      <td className="px-6 py-4">{port.speed}</td>
-                      <td className="px-6 py-3 font-sans">
-                        <select
-                          value={port.vlan}
-                          onChange={(e) => handlePortVlanChange(key, Number(e.target.value))}
-                          className="px-2 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
-                        >
-                          <option value="1">1 (Default Trunk)</option>
-                          {vlans.map(v => (
-                            <option key={v.id} value={v.id}>{v.id} ({v.name})</option>
-                          ))}
-                        </select>
+                      <td className="px-6 py-4 capitalize text-left">{port.adminState}</td>
+                      <td className="px-6 py-4 capitalize text-left">{port.linkState}</td>
+                      <td className="px-6 py-4 text-left">{port.speed}</td>
+                      <td className="px-6 py-4 text-left font-sans">
+                        {!isReadOnly ? (
+                          <select
+                            value={port.vlan.includes(' ') ? port.vlan.split(' ')[0] : port.vlan}
+                            onChange={(e) => handlePortVlanChange(port.name, Number(e.target.value))}
+                            className="px-2 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg disabled:opacity-50"
+                            disabled={isLiveDevice}
+                            title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
+                          >
+                            <option value="">--</option>
+                            {vlans.map(v => (
+                              <option key={v.id} value={v.id}>{v.id} ({v.name})</option>
+                            ))}
+                          </select>
+                        ) : (
+                          port.vlan
+                        )}
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-4 text-left">
                         <Button
                           variant="outline"
-                          onClick={() => handleToggleInterface(key)}
-                          className="text-[10px] py-1 px-2.5"
+                          onClick={() => handleToggleInterface(port.name)}
+                          className="text-[10px] py-1 px-2.5 disabled:opacity-50"
+                          disabled={isLiveDevice}
+                          title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
                         >
-                          {port.enabled ? 'Disable' : 'Enable'}
+                          {isLiveDevice ? 'Read Only' : (port.adminState === 'up' ? 'Disable' : 'Enable')}
                         </Button>
                       </td>
                     </tr>
@@ -401,6 +602,181 @@ export const CoreSwitchManager: React.FC = () => {
               </table>
             </div>
           </Card>
+        )}
+
+        {activeTab === 'telemetry' && (
+          <div className="space-y-6 text-left text-xs font-semibold">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Health & Collector Metadata */}
+              <Card title="Collector stack & Health Metadata" className="space-y-3">
+                {device.collector ? (
+                  <>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Collector Name</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.name}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Collector Version</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.version}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Device Family</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.device_family}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Last Poll Timestamp</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.last_poll}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Poll Duration</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.poll_duration_ms} ms</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Commands Executed / Failed</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">
+                        {device.collector.commands_executed} / {device.collector.commands_failed}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-slate-400">No collector metadata available.</div>
+                )}
+                {device.health && (
+                  <>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10 pt-2 font-bold text-slate-700 dark:text-slate-300">
+                      <span>Connection Status</span>
+                      <span className={device.health.connected ? 'text-emerald-500 text-right' : 'text-rose-500 text-right'}>
+                        {device.health.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">SSH Latency</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.health.ssh_latency_ms} ms</span>
+                    </div>
+                  </>
+                )}
+              </Card>
+
+              {/* Inventory Metadata */}
+              <Card title="Live stack Inventory details" className="space-y-3">
+                {device.inventory ? (
+                  <>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Hostname</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hostname}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Vendor / Family</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.vendor} {device.inventory.family}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Model</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.model}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Serial Number</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.serial}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Software Version</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.software_version}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Hardware Revision</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hardware_revision}</span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1">
+                      <span className="text-slate-400">System Uptime</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.uptime}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-slate-400">No inventory details available.</div>
+                )}
+              </Card>
+            </div>
+
+            {/* Raw Outputs */}
+            {device.raw && Object.keys(device.raw).length > 0 && (
+              <Card title="Raw CLI commands Outcomes" description="Expand to view exact outputs returned from the live device:">
+                <div className="space-y-2 mt-2 font-mono text-[11px]">
+                  {Object.entries(device.raw).map(([cmd, res]: [string, any]) => (
+                    <details key={cmd} className="bg-slate-500/5 rounded-lg border border-slate-200/10 overflow-hidden font-mono">
+                      <summary className="px-4 py-2 font-bold cursor-pointer hover:bg-slate-500/10 flex justify-between select-none">
+                        <span>{cmd}</span>
+                        <span className={res.success ? 'text-emerald-500' : 'text-rose-500'}>
+                          {res.success ? 'SUCCESS' : 'FAILED'}
+                        </span>
+                      </summary>
+                      <div className="p-3 border-t border-slate-200/10 whitespace-pre overflow-x-auto max-h-48 text-[10px] text-slate-650 bg-slate-900/50">
+                        {res.output || res.error || 'Empty Output.'}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'mac_lldp' && (
+          <div className="space-y-6 text-left text-xs font-semibold">
+            {device.telemetry && device.telemetry.mac_table && device.telemetry.mac_table.length > 0 ? (
+              <Card title="Live Switch MAC Address Table" className="p-0 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-slate-200/10 text-left">
+                    <thead className="bg-slate-500/5">
+                      <tr>
+                        <th className="px-4 py-2 text-slate-400">MAC Address</th>
+                        <th className="px-4 py-2 text-slate-400">VLAN</th>
+                        <th className="px-4 py-2 text-slate-400">Interface</th>
+                        <th className="px-4 py-2 text-slate-400">Type</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200/10 font-mono text-[11px]">
+                      {device.telemetry.mac_table.map((m: any, i: number) => (
+                        <tr key={i}>
+                          <td className="px-4 py-2 font-bold">{m.mac_address}</td>
+                          <td className="px-4 py-2">{m.vlan}</td>
+                          <td className="px-4 py-2">{m.interface}</td>
+                          <td className="px-4 py-2">{m.type || 'Dynamic'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            ) : (
+              <Card title="MAC Address Table" description="No MAC addresses parsed from live device." />
+            )}
+
+            {device.telemetry && device.telemetry.lldp_neighbors && device.telemetry.lldp_neighbors.length > 0 ? (
+              <Card title="Live LLDP Topology Neighbors" className="p-0 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-slate-200/10 text-left">
+                    <thead className="bg-slate-500/5">
+                      <tr>
+                        <th className="px-4 py-2 text-slate-400">Local Port</th>
+                        <th className="px-4 py-2 text-slate-400">Neighbor Hostname</th>
+                        <th className="px-4 py-2 text-slate-400">Neighbor Port</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200/10 font-mono text-[11px]">
+                      {device.telemetry.lldp_neighbors.map((n: any, i: number) => (
+                        <tr key={i}>
+                          <td className="px-4 py-2 font-bold">{n.local_interface}</td>
+                          <td className="px-4 py-2">{n.neighbor_hostname}</td>
+                          <td className="px-4 py-2">{n.neighbor_interface}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            ) : (
+              <Card title="LLDP Topology Neighbors" description="No LLDP topology neighbors discovered." />
+            )}
+          </div>
         )}
 
         {activeTab === 'routing' && (
@@ -417,64 +793,82 @@ export const CoreSwitchManager: React.FC = () => {
               )}
             </div>
 
-            <Card className="p-0 overflow-hidden">
-              <Table
-                columns={[
-                  { header: 'Destination IP / Mask', accessor: 'destination', className: 'font-mono' },
-                  { header: 'Next-Hop Gateway', accessor: 'gateway', className: 'font-mono' },
-                  { header: 'Outbound Interface', accessor: 'interface', className: 'font-mono' },
-                  {
-                    header: 'Actions',
-                    accessor: (row: any) => (
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleDeleteRoute(row.destination)}
-                        className="text-rose-500 hover:text-rose-700 p-1 h-8 w-8 flex items-center justify-center"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    ),
-                    className: 'text-right'
-                  }
-                ]}
-                data={routesList}
-              />
-            </Card>
+            {routesList.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200/10">
+                No route information available.
+              </div>
+            ) : (
+              <Card className="p-0 overflow-hidden">
+                <Table
+                  columns={[
+                    { header: 'Destination IP / Mask', accessor: 'destination', className: 'font-mono' },
+                    { header: 'Next-Hop Gateway', accessor: 'gateway', className: 'font-mono' },
+                    { header: 'Outbound Interface', accessor: 'interface', className: 'font-mono' },
+                    {
+                      header: 'Actions',
+                      accessor: (row: any) => (
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleDeleteRoute(row.destination)}
+                          className="text-rose-500 hover:text-rose-700 p-1 h-8 w-8 flex items-center justify-center"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ),
+                      className: 'text-right'
+                    }
+                  ]}
+                  data={routesList}
+                />
+              </Card>
+            )}
           </div>
         )}
 
         {activeTab === 'lags' && (
           <Card title="Link Aggregation Groups (LAG / LACP)" description="Trunk aggregations to spine switches:">
-            <Table
-              columns={[
-                { header: 'LAG Interface', accessor: 'name' },
-                {
-                  header: 'Member Ports',
-                  accessor: (row: any) => <span className="font-mono text-xs">{row.ports.join(', ')}</span>
-                },
-                {
-                  header: 'Link State',
-                  accessor: (row: any) => <StatusBadge status={row.status === 'up' ? 'online' : 'offline'} />
-                },
-                { header: 'Aggregated Bandwidth', accessor: 'speed' },
-                { header: 'LACP Mode', accessor: 'mode' },
-                { header: 'Trunk native VLAN', accessor: 'vlan' }
-              ]}
-              data={lags}
-            />
+            {lags.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs">
+                No Link Aggregation information available.
+              </div>
+            ) : (
+              <Table
+                columns={[
+                  { header: 'LAG Interface', accessor: 'name' },
+                  {
+                    header: 'Member Ports',
+                    accessor: (row: any) => <span className="font-mono text-xs">{row.ports.join(', ')}</span>
+                  },
+                  {
+                    header: 'Link State',
+                    accessor: (row: any) => <StatusBadge status={row.status === 'up' ? 'online' : 'offline'} />
+                  },
+                  { header: 'Aggregated Bandwidth', accessor: 'speed' },
+                  { header: 'LACP Mode', accessor: 'mode' },
+                  { header: 'Trunk native VLAN', accessor: 'vlan' }
+                ]}
+                data={lags}
+              />
+            )}
           </Card>
         )}
 
         {activeTab === 'stp' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
             <Card title="Spanning Tree Protocol (STP) Configuration" description="Configure loop prevention parameters.">
+              {isLiveDevice && (
+                <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-xl p-3.5 text-xs font-semibold mb-4">
+                  Configuration not supported by current backend.
+                </div>
+              )}
               <form onSubmit={handleSaveStp} className="space-y-4 font-sans">
                 <div className="space-y-1">
                   <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">STP Mode</label>
                   <select
                     value={stpMode}
                     onChange={(e) => setStpMode(e.target.value as any)}
-                    className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
+                    className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl disabled:opacity-50"
+                    disabled={isLiveDevice}
                   >
                     <option value="RSTP">Rapid Spanning Tree Protocol (RSTP)</option>
                     <option value="MSTP">Multiple Spanning Tree Protocol (MSTP)</option>
@@ -485,7 +879,8 @@ export const CoreSwitchManager: React.FC = () => {
                   <select
                     value={bridgePriority}
                     onChange={(e) => setBridgePriority(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
+                    className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl disabled:opacity-50"
+                    disabled={isLiveDevice}
                   >
                     <option value="0">0 (Root-preferential)</option>
                     <option value="4096">4096</option>
@@ -494,10 +889,45 @@ export const CoreSwitchManager: React.FC = () => {
                   </select>
                 </div>
                 <div className="pt-2 flex items-center gap-2">
-                  <Button type="submit" variant="primary">Update STP Parameters</Button>
+                  <Button type="submit" variant="primary" disabled={isLiveDevice}>
+                    {isLiveDevice ? 'Not Supported' : 'Update STP Parameters'}
+                  </Button>
                   {isStpSaved && <span className="text-emerald-500 font-semibold text-xs">STP Config Pushed!</span>}
                 </div>
               </form>
+            </Card>
+
+            <Card title="Spanning Tree Diagnostics" description="Real-time loop prevention diagnostics:">
+              {device.telemetry?.stp ? (
+                <div className="text-xs text-slate-700 dark:text-slate-300 flex flex-col space-y-2 mt-2 font-sans">
+                  <div className="flex justify-between py-1 border-b border-slate-200/10">
+                    <span className="text-slate-400">Protocol:</span>
+                    <span className="font-mono font-bold">{device.telemetry.stp.protocol || 'RSTP'}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200/10">
+                    <span className="text-slate-400">Bridge ID:</span>
+                    <span className="font-mono font-bold">{device.telemetry.stp.bridge_id || '--'}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200/10">
+                    <span className="text-slate-400">Priority:</span>
+                    <span className="font-mono">{device.telemetry.stp.priority || '32768'}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200/10">
+                    <span className="text-slate-400">Role:</span>
+                    <span className="font-bold text-emerald-500">{device.telemetry.stp.role || 'Designated'}</span>
+                  </div>
+                  <div className="flex justify-between py-1">
+                    <span className="text-slate-400">Status:</span>
+                    <span className={device.telemetry.stp.is_root ? 'text-emerald-500 font-bold' : 'text-slate-400'}>
+                      {device.telemetry.stp.is_root ? 'ROOT Bridge' : 'Non-Root'}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200/10">
+                  No Spanning Tree telemetry available.
+                </div>
+              )}
             </Card>
           </div>
         )}

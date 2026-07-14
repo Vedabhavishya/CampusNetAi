@@ -1,64 +1,164 @@
 import os
 import time
+import logging
 from .base_collector import BaseCollector, calculate_health_score
 from .ssh_manager import SSHManager
-from .commands import SRX_COMMANDS
-from .parsers.srx_parser import SRXParser
-from .mock.mock_firewall import MockFirewallCollector
+from .commands import EX4100_COMMANDS
+from .parsers.ex4100_parser import EX4100Parser
+from .mock.mock_switch import MockCoreSwitchCollector
 from .telemetry_cache import telemetry_cache
 
-class SRXCollector(BaseCollector):
+logger = logging.getLogger("EX4100Collector")
+
+class EX4100Collector(BaseCollector):
     """
-    Juniper SRX300 Physical Device Collector.
-    Connects to the firewall over SSH, parses telemetry, keeps health state,
-    and returns detailed hardware configurations/inventory.
+    Physical Juniper EX4100 switch collector.
+    Executes commands sequentially in a single SSH session, parses telemetry,
+    calculates dynamic health, and returns structured data compliant with the API.
     """
     def __init__(self):
+        self.name = "EX4100"
         self.ssh_manager = SSHManager()
-        self.parser = SRXParser()
-        self.mock_collector = MockFirewallCollector()
-        self.device_id = "dev-fw-1"
+        self.parser = EX4100Parser()
+        self.commands = EX4100_COMMANDS
+        self.mock_collector = MockCoreSwitchCollector()
+        self.device_id = "dev-cs-1"
         self._inventory = {}
         self._interfaces = []
-        self._routes = []
-        self._security = {}
-        self._sessions_arp = {}
+        self._vlans = []
+        self._mac_table = []
+        self._lldp_neighbors = []
+        self._port_statistics = {}
         self._chassis = {}
-        self._uptime = "0 mins"
+        self._uptime = "142 days, 2 hours"
         self._raw_telemetry = {}
         
+        # Stats tracking specifically for collector metadata
         self.collector_stats = {
             "commands_executed": 0,
             "commands_failed": 0,
             "poll_duration_ms": 0
         }
 
-    def connect(self) -> bool:
-        host = os.getenv("SRX_HOST", "192.168.1.1")
+    def connect(self, host: str = None) -> bool:
+        if not host:
+            host = os.getenv("EX_HOST", "10.10.10.2")
         try:
-            port = int(os.getenv("SRX_PORT", "22"))
+            port = int(os.getenv("EX_PORT", "22"))
         except ValueError:
             port = 22
-        username = os.getenv("SRX_USERNAME", "admin")
-        password = os.getenv("SRX_PASSWORD", "Juniper@1234")
+        username = os.getenv("EX_USERNAME", "root")
+        password = os.getenv("EX_PASSWORD", "Juniper@1234")
         
         try:
             return self.ssh_manager.connect(host, port, username, password)
-        except Exception:
+        except Exception as e:
+            logger.error(f"[Collector][{self.name}] SSH Connection failed: {e}")
             return False
 
     def disconnect(self):
         self.ssh_manager.disconnect()
 
-    def collect(self) -> dict:
+    def get_mock_telemetry(self, host: str, start_time: float, mock_data: dict, history_list: list) -> dict:
+        poll_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        poll_duration_ms = int((time.time() - start_time) * 1000)
+        return {
+            "status": "online",
+            "health_score": mock_data["health_score"],
+            "cpu_usage": mock_data["cpu_usage"],
+            "memory_usage": mock_data["memory_usage"],
+            "uptime": mock_data["uptime"],
+            "model": mock_data["model"],
+            "version": mock_data["version"],
+            "temperature": 42,
+            "telemetry": {
+                "hostname": "CN-CS-01-SPINE",
+                "interfaces": [
+                    {"interface": "ge-0/0/0", "admin": "up", "link": "up", "ip": "N/A", "protocol": "eth-switch"},
+                    {"interface": "ge-0/0/1", "admin": "up", "link": "up", "ip": "N/A", "protocol": "eth-switch"}
+                ],
+                "routes": [],
+                "zones": [],
+                "policies": [],
+                "vlans": [
+                    {"name": "default", "id": 1, "members": ["ge-0/0/0", "ge-0/0/1"], "member_count": 2}
+                ],
+                "mac_table": [
+                    {"mac_address": "00:15:5d:83:b2:1a", "vlan": "default", "interface": "ge-0/0/0", "type": "Dynamic", "age": "-"}
+                ],
+                "lldp_neighbors": [
+                    {"local_interface": "ge-0/0/0", "neighbor_hostname": "SRX300-FW", "neighbor_interface": "ge-0/0/0", "neighbor_chassis_id": "00:0b:82:11:a3:f1"}
+                ],
+                "port_statistics": {
+                    "ports": {},
+                    "aggregate": {"total_rx": 5000, "total_tx_8000": 8000, "switch_throughput_bps": 12000, "average_utilization": 0.01}
+                },
+                "metrics": {
+                    "cpu": {"user": 5, "kernel": 2, "idle": 93},
+                    "memory": {"total": 8192, "used": 3440, "usage": 42},
+                    "temperature": {"system": 38, "cpu": 42},
+                    "interfaces": {"total": 2, "up": 2, "down": 0, "physical": 2, "logical": 0},
+                    "traffic": {"total_rx_bytes": 5000, "total_tx_bytes": 8000, "switch_throughput_bps": 12000, "average_utilization": 0.01},
+                    "errors": {"input_errors": 0, "output_errors": 0, "drops": 0, "crc_errors": 0}
+                },
+                "performance": {
+                    "current": {
+                        "ssh_latency_ms": 0,
+                        "poll_duration_ms": poll_duration_ms,
+                        "total_bytes_received": 0,
+                        "commands_executed": 0,
+                        "commands_failed": 0,
+                        "commands": []
+                    },
+                    "history": history_list
+                }
+            },
+            "raw": {},
+            "collector": {
+                "name": "EX4100Collector",
+                "version": "1.0.0",
+                "vendor": "Juniper",
+                "device_family": "EX",
+                "last_poll": poll_timestamp,
+                "poll_duration_ms": poll_duration_ms,
+                "commands_executed": 0,
+                "commands_failed": 0
+            },
+            "inventory": {
+                "device_id": self.device_id,
+                "hostname": "CN-CS-01-SPINE",
+                "vendor": "Juniper",
+                "family": "EX",
+                "model": mock_data["model"],
+                "serial": "CV3324AX0240",
+                "management_ip": host,
+                "software_version": mock_data["version"],
+                "hardware_revision": "REV 01",
+                "uptime": mock_data["uptime"]
+            },
+            "health": {
+                "connected": False,
+                "status": "online",
+                "health_score": mock_data["health_score"],
+                "last_seen": poll_timestamp,
+                "last_successful_poll": poll_timestamp,
+                "ssh_latency_ms": 0,
+                "poll_duration_ms": poll_duration_ms,
+                "command_failures": 0
+            }
+        }
+
+    def collect(self, host: str = None) -> dict:
         """
-        Gathers all telemetry in a single SSH session and parses it.
+        Gathers all switch telemetry in a single SSH session and parses it.
         """
-        # Read from environment variables if we should use mock fallback
+        if not host:
+            host = os.getenv("EX_HOST", "10.10.10.2")
         use_mock_fallback = os.getenv("USE_MOCK_FALLBACK", "true").lower() == "true"
-        
         start_time = time.time()
-        connected = self.connect()
+        
+        print(f"[Collector][{self.name}] Connecting to {host}...", flush=True)
+        connected = self.connect(host)
         
         if not connected:
             poll_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -71,86 +171,15 @@ class SRXCollector(BaseCollector):
             telemetry_cache.add_history(self.device_id, history_entry)
             
             if use_mock_fallback:
-                print("[SRXCollector] Live device unreachable. Falling back to Mock data.", flush=True)
-                mock_data = self.mock_collector.collect_status("192.168.1.1", "00:0B:82:11:A3:F1")
+                print(f"[Collector][{self.name}] Live device unreachable. Falling back to Mock switch data.", flush=True)
+                mock_data = self.mock_collector.collect_status(host, "00:15:5d:83:b2:1a")
                 
                 # Fetch history
                 history_list = telemetry_cache.get_history(self.device_id)
-                
-                # Populate internal properties for API legacy accesses
-                self._inventory = {
-                    "model": mock_data["model"],
-                    "junos": mock_data["version"],
-                    "hostname": mock_data["telemetry"]["hostname"],
-                    "vendor": "Juniper (Mock Fallback)",
-                    "device_type": "Firewall",
-                    "serial": "MOCK-SERIAL-SRX300"
-                }
-                self._interfaces = mock_data["telemetry"]["interfaces"]
-                self._routes = mock_data["telemetry"]["routes"]
-                self._security = {
-                    "zones": mock_data["telemetry"]["zones"],
-                    "policies": mock_data["telemetry"]["policies"]
-                }
-                self._chassis = {
-                    "cpu": {"user": 5, "kernel": 5, "idle": 90},
-                    "memory": {"total": 4096, "used": 1433, "usage": 35},
-                    "temperature": {"system": 38, "cpu": 38}
-                }
-                self._uptime = mock_data["uptime"]
-                self._sessions_arp = {
-                    "active_sessions": mock_data["telemetry"]["active_sessions"],
-                    "arp_entries_count": 5
-                }
-                
-                # Enrich mock data
-                mock_data["collector"] = {
-                    "name": "SRXCollector",
-                    "version": "1.0.0",
-                    "vendor": "Juniper",
-                    "device_family": "SRX",
-                    "last_poll": poll_timestamp,
-                    "poll_duration_ms": 10,
-                    "commands_executed": 0,
-                    "commands_failed": 0
-                }
-                mock_data["inventory"] = {
-                    "device_id": self.device_id,
-                    "hostname": mock_data["telemetry"]["hostname"],
-                    "vendor": "Juniper",
-                    "family": "SRX",
-                    "model": mock_data["model"],
-                    "serial": "MOCK-SERIAL-SRX300",
-                    "management_ip": "192.168.1.1",
-                    "software_version": mock_data["version"],
-                    "hardware_revision": "REV 01",
-                    "uptime": mock_data["uptime"]
-                }
-                mock_data["health"] = {
-                    "connected": False,
-                    "status": "online",
-                    "health_score": mock_data.get("health_score", 95),
-                    "last_seen": poll_timestamp,
-                    "last_successful_poll": poll_timestamp,
-                    "ssh_latency_ms": 0,
-                    "poll_duration_ms": 10,
-                    "command_failures": 0
-                }
-                mock_data["telemetry"]["performance"] = {
-                    "current": {
-                        "ssh_latency_ms": 0,
-                        "poll_duration_ms": 10,
-                        "total_bytes_received": 0,
-                        "commands_executed": 0,
-                        "commands_failed": 0,
-                        "commands": []
-                    },
-                    "history": history_list
-                }
-                mock_data["raw"] = {}
-                return mock_data
+                return self.get_mock_telemetry(host, start_time, mock_data, history_list)
             else:
-                print("[SRXCollector] Connection Failure. Mock fallback disabled.", flush=True)
+                print(f"[Collector][{self.name}] Connection Failure. Mock fallback disabled.", flush=True)
+                poll_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 history_list = telemetry_cache.get_history(self.device_id)
                 return {
                     "connected": False,
@@ -171,10 +200,10 @@ class SRXCollector(BaseCollector):
                         }
                     },
                     "collector": {
-                        "name": "SRXCollector",
+                        "name": "EX4100Collector",
                         "version": "1.0.0",
                         "vendor": "Juniper",
-                        "device_family": "SRX",
+                        "device_family": "EX",
                         "last_poll": poll_timestamp,
                         "poll_duration_ms": int((time.time() - start_time) * 1000),
                         "commands_executed": 0,
@@ -192,30 +221,30 @@ class SRXCollector(BaseCollector):
                     }
                 }
 
-        # Successful connection: collect telemetry using a single SSH session
+        # Successful connection: collect telemetry sequentially in same session
         latency_ms = self.ssh_manager.stats.get("ssh_latency_ms", 0)
-        print(f"[Collector][SRX300] Connecting...", flush=True)
         print(f"[SSH] Connected (Latency: {latency_ms} ms)", flush=True)
         
         self.ssh_manager.stats["poll_count"] += 1
         self._raw_telemetry = {}
-        
-        username = os.getenv("SRX_USERNAME", "admin")
-        is_root = (username == "root")
-        
         self.collector_stats["commands_executed"] = 0
         self.collector_stats["commands_failed"] = 0
         total_bytes_received = 0
         command_perf_metrics = []
         raw_outputs = {}
         
-        def run_cmd_monitored(cmd_key: str):
-            cmd = SRX_COMMANDS[cmd_key]
+        username = os.getenv("EX_USERNAME", "root")
+        is_root = (username == "root")
+
+        # Command mapping helper with timeout handling
+        def exec_command_with_timeout(cmd_key):
+            cmd = self.commands[cmd_key]
             full_cmd = f'cli -c "{cmd}"' if is_root else cmd
             
             self.collector_stats["commands_executed"] += 1
             cmd_start = time.time()
             try:
+                # 10s default execution timeout
                 output = self.ssh_manager.run_command(full_cmd, timeout=10) or ""
                 cmd_duration = int((time.time() - cmd_start) * 1000)
                 cmd_bytes = len(output)
@@ -243,7 +272,7 @@ class SRXCollector(BaseCollector):
             except Exception as ex:
                 self.collector_stats["commands_failed"] += 1
                 cmd_duration = int((time.time() - cmd_start) * 1000)
-                print(f"Timeout/Error executing command '{cmd}': {ex}", flush=True)
+                logger.warning(f"Timeout/Error executing command '{cmd}': {ex}")
                 
                 raw_outputs[cmd_key] = ""
                 
@@ -262,45 +291,45 @@ class SRXCollector(BaseCollector):
                 
                 return ""
 
-        try:
-            # 1. Execute all CLI commands and store raw outputs
-            raw_version = run_cmd_monitored("version")
-            raw_uptime = run_cmd_monitored("uptime")
-            raw_cpu = run_cmd_monitored("cpu")
-            raw_interfaces = run_cmd_monitored("interfaces")
-            raw_routes = run_cmd_monitored("routes")
-            raw_zones = run_cmd_monitored("zones")
-            raw_policies = run_cmd_monitored("policies")
-            raw_sessions = run_cmd_monitored("sessions")
-            raw_arp = run_cmd_monitored("arp")
+        # Execute commands in strict order
+        raw_version = exec_command_with_timeout("version")
+        raw_uptime = exec_command_with_timeout("uptime")
+        raw_cpu = exec_command_with_timeout("routing_engine")
+        raw_interfaces = exec_command_with_timeout("interfaces")
+        raw_vlans = exec_command_with_timeout("vlans")
+        raw_mac = exec_command_with_timeout("mac_table")
+        raw_lldp = exec_command_with_timeout("lldp")
+        raw_stats = exec_command_with_timeout("interface_stats")
 
-            # 2. Parse telemetry
+        try:
+            # Parse Outputs
             self._inventory = self.parser.parse_version(raw_version)
-            # Add static / derived properties
-            self._inventory["serial"] = "CV3324AX0240"
-            self._inventory["interfaces"] = len(self._interfaces)
-            
             self._uptime = self.parser.parse_uptime(raw_uptime)
             self._chassis = self.parser.parse_chassis(raw_cpu)
             self._interfaces = self.parser.parse_interfaces(raw_interfaces)
-            self._routes = self.parser.parse_routes(raw_routes)
-            self._security = self.parser.parse_security(raw_zones, raw_policies)
-            self._sessions_arp = self.parser.parse_sessions_arp(raw_sessions, raw_arp)
+            self._vlans = self.parser.parse_vlans(raw_vlans)
+            self._mac_table = self.parser.parse_mac_table(raw_mac)
+            self._lldp_neighbors = self.parser.parse_lldp(raw_lldp)
+            self._port_statistics = self.parser.parse_interface_stats(raw_stats)
 
             print("Parser Summary:", flush=True)
             print(f"[Parser] Interfaces Parsed: {len(self._interfaces)}", flush=True)
-            print(f"[Parser] Routes Parsed: {len(self._routes)}", flush=True)
-            print(f"[Parser] Zones Parsed: {len(self._security.get('zones', []))}", flush=True)
-            print(f"[Parser] Policies Parsed: {len(self._security.get('policies', []))}", flush=True)
-            print(f"[Parser] Sessions & ARP Parsed: {self._sessions_arp.get('arp_entries_count', 0)}", flush=True)
+            print(f"[Parser] VLANs Parsed: {len(self._vlans)}", flush=True)
+            print(f"[Parser] MAC Entries Parsed: {len(self._mac_table)}", flush=True)
+            print(f"[Parser] LLDP Neighbors Parsed: {len(self._lldp_neighbors)}", flush=True)
+            print(f"[Parser] Port Statistics Parsed: {len(self._port_statistics.get('ports', {}))}", flush=True)
 
+            # Standardized inventory properties
+            self._inventory["serial"] = "CV3324AX0240"
+            self._inventory["interfaces"] = len(self._interfaces)
+            
             # Update last successful poll timestamp
             poll_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             poll_duration_ms = int((time.time() - start_time) * 1000)
             self.ssh_manager.stats["last_successful_poll"] = poll_timestamp
-            
             self.ssh_manager.stats["response_time_ms"] = poll_duration_ms
-            
+            self.collector_stats["poll_duration_ms"] = poll_duration_ms
+
             # Record performance history
             history_entry = {
                 "timestamp": poll_timestamp,
@@ -312,56 +341,96 @@ class SRXCollector(BaseCollector):
             # Fetch history
             history_list = telemetry_cache.get_history(self.device_id)
 
-            # Calculate health score dynamically
-            cpu_usage = 100 - self._chassis["cpu"]["idle"]
-            memory_usage = self._chassis["memory"]["usage"]
-            temperature = self._chassis["temperature"]["system"]
+            # Dynamic Health Calculation
+            cpu_idle = self._chassis["cpu"]["idle"]
+            cpu_usage = 100 - cpu_idle
+            mem_usage = self._chassis["memory"]["usage"]
+            temp_system = self._chassis["temperature"]["system"]
+            temp_cpu = self._chassis["temperature"]["cpu"]
             
-            down_interfaces_count = 0
+            down_count = 0
             for iface in self._interfaces:
                 if "." not in iface["interface"]:
                     if iface["admin"] == "up" and iface["link"] == "down":
-                        down_interfaces_count += 1
+                        down_count += 1
                         
-            error_interfaces_count = 0
+            agg = self._port_statistics.get("aggregate", {})
+            input_errors = agg.get("errors", {}).get("input_errors", 0) if isinstance(agg.get("errors"), dict) else 0
+            output_errors = agg.get("errors", {}).get("output_errors", 0) if isinstance(agg.get("errors"), dict) else 0
+            crc_errors = agg.get("errors", {}).get("crc_errors", 0) if isinstance(agg.get("errors"), dict) else 0
+            
+            error_ports_count = 0
+            if "ports" in self._port_statistics:
+                for p_name, p_stat in self._port_statistics["ports"].items():
+                    if p_stat.get("input_errors", 0) > 0 or p_stat.get("output_errors", 0) > 0 or p_stat.get("crc_errors", 0) > 0:
+                        error_ports_count += 1
             
             health_score = calculate_health_score(
                 connected=True,
                 cpu_usage=cpu_usage,
-                memory_usage=memory_usage,
-                temperature=temperature,
-                down_interfaces_count=down_interfaces_count,
-                error_interfaces_count=error_interfaces_count,
+                memory_usage=mem_usage,
+                temperature=temp_system,
+                down_interfaces_count=down_count,
+                error_interfaces_count=error_ports_count,
                 command_failures_count=self.collector_stats["commands_failed"]
             )
 
+            # Build Standardized Metrics sub-object
+            metrics = {
+                "cpu": self._chassis["cpu"],
+                "memory": self._chassis["memory"],
+                "temperature": self._chassis["temperature"],
+                "interfaces": {
+                    "total": len(self._interfaces),
+                    "up": sum(1 for i in self._interfaces if i["link"] == "up"),
+                    "down": sum(1 for i in self._interfaces if i["link"] == "down"),
+                    "physical": sum(1 for i in self._interfaces if "." not in i["interface"]),
+                    "logical": sum(1 for i in self._interfaces if "." in i["interface"])
+                },
+                "traffic": {
+                    "total_rx_bytes": agg.get("total_rx", 0),
+                    "total_tx_bytes": agg.get("total_tx", 0),
+                    "switch_throughput_bps": agg.get("switch_throughput_bps", 0),
+                    "average_utilization": agg.get("average_utilization", 0.0)
+                },
+                "errors": {
+                    "input_errors": input_errors,
+                    "output_errors": output_errors,
+                    "drops": agg.get("errors", {}).get("drops", 0) if isinstance(agg.get("errors"), dict) else 0,
+                    "crc_errors": crc_errors
+                }
+            }
+
             print("[Scheduler] Cache Updated", flush=True)
             print("[Scheduler] Database Updated", flush=True)
-            print(f"[Collector][SRX300] Completed", flush=True)
+            print(f"[Collector][{self.name}] Completed", flush=True)
             print(f"Poll Duration: {poll_duration_ms / 1000:.2f} s", flush=True)
             print(f"Health Score: {health_score}", flush=True)
             print(f"Commands Executed: {self.collector_stats['commands_executed']}", flush=True)
             print(f"Commands Failed: {self.collector_stats['commands_failed']}", flush=True)
             print(f"Bytes Received: {total_bytes_received}", flush=True)
 
-            # Format status structure matching existing interface
+            # Format final telemetry object
             result = {
                 "status": "online",
                 "health_score": health_score,
                 "cpu_usage": cpu_usage,
-                "memory_usage": memory_usage,
+                "memory_usage": mem_usage,
                 "uptime": self._uptime,
                 "model": self._inventory["model"],
                 "version": self._inventory["junos"],
-                "temperature": temperature,
+                "temperature": temp_system,
                 "telemetry": {
                     "hostname": self._inventory["hostname"],
-                    "active_sessions": self._sessions_arp["active_sessions"],
-                    "packet_loss_percentage": 0.0,
                     "interfaces": self._interfaces,
-                    "routes": self._routes,
-                    "zones": self._security["zones"],
-                    "policies": self._security["policies"],
+                    "routes": [],
+                    "zones": [],
+                    "policies": [],
+                    "vlans": self._vlans,
+                    "mac_table": self._mac_table,
+                    "lldp_neighbors": self._lldp_neighbors,
+                    "port_statistics": self._port_statistics,
+                    "metrics": metrics,
                     "performance": {
                         "current": {
                             "ssh_latency_ms": latency_ms,
@@ -376,10 +445,10 @@ class SRXCollector(BaseCollector):
                 },
                 "raw": self._raw_telemetry,
                 "collector": {
-                    "name": "SRXCollector",
+                    "name": "EX4100Collector",
                     "version": "1.0.0",
                     "vendor": "Juniper",
-                    "device_family": "SRX",
+                    "device_family": "EX",
                     "last_poll": poll_timestamp,
                     "poll_duration_ms": poll_duration_ms,
                     "commands_executed": self.collector_stats["commands_executed"],
@@ -389,10 +458,10 @@ class SRXCollector(BaseCollector):
                     "device_id": self.device_id,
                     "hostname": self._inventory["hostname"],
                     "vendor": "Juniper",
-                    "family": "SRX",
+                    "family": "EX",
                     "model": self._inventory["model"],
                     "serial": "CV3324AX0240",
-                    "management_ip": os.getenv("SRX_HOST", "192.168.1.1"),
+                    "management_ip": host,
                     "software_version": self._inventory["junos"],
                     "hardware_revision": "REV 01",
                     "uptime": self._uptime
@@ -405,23 +474,25 @@ class SRXCollector(BaseCollector):
                     "last_successful_poll": poll_timestamp,
                     "ssh_latency_ms": latency_ms,
                     "poll_duration_ms": poll_duration_ms,
-                    "command_failures": self.collector_stats["command_failures" if "command_failures" in self.collector_stats else "commands_failed"]
+                    "command_failures": self.collector_stats["commands_failed"]
                 }
             }
             return result
         except Exception as e:
-            print(f"[Collector][SRXCollector] Collector Errors during parsing/poll: {e}", flush=True)
+            print(f"[Collector][{self.name}] Errors parsing switch outputs: {e}", flush=True)
             self.ssh_manager.stats["failed_polls"] += 1
             self.ssh_manager.stats["last_failed_poll"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             if use_mock_fallback:
-                return self.mock_collector.collect_status("192.168.1.1", "00:0B:82:11:A3:F1")
+                mock_data = self.mock_collector.collect_status(host, "00:15:5d:83:b2:1a")
+                history_list = telemetry_cache.get_history(self.device_id)
+                return self.get_mock_telemetry(host, start_time, mock_data, history_list)
             else:
                 poll_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 history_list = telemetry_cache.get_history(self.device_id)
                 return {
                     "connected": False,
                     "status": "offline",
-                    "reason": f"SSH Command / Parsing Error: {e}",
+                    "reason": f"Switch parsing error: {e}",
                     "last_successful_poll": self.ssh_manager.stats.get("last_successful_poll"),
                     "telemetry": {
                         "performance": {
@@ -437,10 +508,10 @@ class SRXCollector(BaseCollector):
                         }
                     },
                     "collector": {
-                        "name": "SRXCollector",
+                        "name": "EX4100Collector",
                         "version": "1.0.0",
                         "vendor": "Juniper",
-                        "device_family": "SRX",
+                        "device_family": "EX",
                         "last_poll": poll_timestamp,
                         "poll_duration_ms": int((time.time() - start_time) * 1000),
                         "commands_executed": self.collector_stats["commands_executed"],
@@ -476,7 +547,7 @@ class SRXCollector(BaseCollector):
             "response_time_ms": self.ssh_manager.stats["response_time_ms"],
             "poll_count": self.ssh_manager.stats["poll_count"],
             "failed_polls": self.ssh_manager.stats["failed_polls"],
-            "collector": "SRXCollector",
+            "collector": "EX4100Collector",
             "status": status_str
         }
 
@@ -486,29 +557,25 @@ class SRXCollector(BaseCollector):
     def get_interfaces(self) -> list:
         return self._interfaces
 
-    # Legacy Compatibility implementation
     def collect_status(self, ip_address: str, mac_address: str, config: dict = None, device_id: str = None) -> dict:
         if device_id:
             self.device_id = device_id
         return self.collect()
 
     def push_configuration(self, ip_address: str, config: dict, credentials: dict = None) -> bool:
-        # Push configuration command parsing compatibility
         use_mock_fallback = os.getenv("USE_MOCK_FALLBACK", "true").lower() == "true"
         if use_mock_fallback:
             return self.mock_collector.push_configuration(ip_address, config)
 
-        # Real push logic
         connected = self.connect()
         if not connected:
             return False
         try:
-            username = os.getenv("SRX_USERNAME", "admin")
+            username = os.getenv("EX_USERNAME", "root")
             is_root = (username == "root")
             
             commands = ["configure"]
-            if "dnsServers" in config:
-                commands.append(f"set system name-server {config['dnsServers'][0]}")
+            # Switch configuration commands can go here
             commands.append("commit")
             
             if is_root:
@@ -519,7 +586,27 @@ class SRXCollector(BaseCollector):
                     self.ssh_manager.run_command(cmd)
             return True
         except Exception as e:
-            print(f"[SRXCollector] Push Configuration Failed: {e}", flush=True)
+            logger.error(f"[Collector][{self.name}] Push Config failed: {e}")
             return False
         finally:
             self.disconnect()
+
+    def health(self) -> dict:
+        status_str = "healthy"
+        if not self.ssh_manager.stats["connected"]:
+            status_str = "offline"
+        elif self.ssh_manager.stats["failed_polls"] > 0:
+            status_str = "warning"
+            
+        return {
+            "device_id": self.device_id,
+            "connected": self.ssh_manager.stats["connected"],
+            "last_seen": self.ssh_manager.stats["last_seen"],
+            "last_successful_poll": self.ssh_manager.stats["last_successful_poll"],
+            "last_failed_poll": self.ssh_manager.stats["last_failed_poll"],
+            "response_time_ms": self.ssh_manager.stats["response_time_ms"],
+            "poll_count": self.ssh_manager.stats["poll_count"],
+            "failed_polls": self.ssh_manager.stats["failed_polls"],
+            "collector": "EX4100Collector",
+            "status": status_str
+        }

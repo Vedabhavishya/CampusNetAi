@@ -15,6 +15,8 @@ const setStorageItem = <T>(key: string, value: T): void => {
   localStorage.setItem(key, JSON.stringify(value));
 };
 
+const API_BASE_URL = 'http://localhost:8000/api/v1';
+
 // --- INITIAL STATE SEEDING ---
 const initialDevices: NetworkDevice[] = [
   {
@@ -524,265 +526,338 @@ class CampusNetApi {
 
   // Devices
   async fetchDevices(): Promise<NetworkDevice[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getDevices()), 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/devices`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          this.setDevices(data);
+          return data;
+        }
+      }
+    } catch (e) {
+      console.warn("Backend offline, falling back to local devices database:", e);
+    }
+    return this.getDevices();
   }
 
   async updateDeviceConfig(deviceId: string, config: Partial<DeviceConfig>): Promise<NetworkDevice> {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const devices = this.getDevices();
-        const index = devices.findIndex((d) => d.id === deviceId);
-        if (index === -1) return reject(new Error('Device not found'));
-        
-        devices[index].config = { ...devices[index].config, ...config };
-        this.setDevices(devices);
-        resolve(devices[index]);
-      }, 500);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/devices/${deviceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend update failed, falling back to local update:", e);
+    }
+    const devices = this.getDevices();
+    const index = devices.findIndex((d) => d.id === deviceId);
+    if (index === -1) throw new Error('Device not found');
+    
+    devices[index].config = { ...devices[index].config, ...config };
+    this.setDevices(devices);
+    return devices[index];
   }
 
   async onboardDevice(device: Omit<NetworkDevice, 'id' | 'healthScore' | 'cpuUsage' | 'memoryUsage' | 'clientsCount' | 'uptime'>): Promise<NetworkDevice> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const devices = this.getDevices();
-        const newDevice: NetworkDevice = {
-          ...device,
-          id: 'dev-' + Math.random().toString(36).substring(7),
-          healthScore: 100,
-          cpuUsage: 5,
-          memoryUsage: 12,
-          clientsCount: 0,
-          uptime: '0 mins',
-        };
-        devices.push(newDevice);
-        this.setDevices(devices);
+    try {
+      const res = await fetch(`${API_BASE_URL}/devices/onboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(device)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend onboarding failed, falling back to local onboarding:", e);
+    }
+    const devices = this.getDevices();
+    const newDevice: NetworkDevice = {
+      ...device,
+      id: 'dev-' + Math.random().toString(36).substring(7),
+      healthScore: 100,
+      cpuUsage: 5,
+      memoryUsage: 12,
+      clientsCount: 0,
+      uptime: '0 mins',
+    };
+    devices.push(newDevice);
+    this.setDevices(devices);
 
-        // Add a system log/alert about registration
-        const alerts = this.getAlerts();
-        alerts.unshift({
-          id: 'alert-' + Math.random().toString(36).substring(7),
-          severity: 'info',
-          message: `New Device ${device.name} (${device.model}) registered successfully via onboarding portal.`,
-          timestamp: new Date().toISOString(),
-          deviceId: newDevice.id,
-          deviceName: newDevice.name,
-          resolved: false,
-          category: 'system'
-        });
-        this.setAlerts(alerts);
-
-        resolve(newDevice);
-      }, 800);
+    const alerts = this.getAlerts();
+    alerts.unshift({
+      id: 'alert-' + Math.random().toString(36).substring(7),
+      severity: 'info',
+      message: `New Device ${device.name} (${device.model}) registered successfully via onboarding portal.`,
+      timestamp: new Date().toISOString(),
+      deviceId: newDevice.id,
+      deviceName: newDevice.name,
+      resolved: false,
+      category: 'system'
     });
+    this.setAlerts(alerts);
+
+    return newDevice;
   }
 
   async deleteDevice(id: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const devices = this.getDevices();
-        const filtered = devices.filter((d) => d.id !== id);
-        this.setDevices(filtered);
-        resolve(true);
-      }, 400);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/devices/${id}`, { method: 'DELETE' });
+      if (res.ok) return true;
+    } catch (e) {
+      console.warn("Backend deletion failed, falling back to local deletion:", e);
+    }
+    const devices = this.getDevices();
+    const filtered = devices.filter((d) => d.id !== id);
+    this.setDevices(filtered);
+    return true;
   }
 
   // Clients
   async fetchClients(): Promise<NetworkClient[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getClients()), 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/clients`);
+      if (res.ok) {
+        const data = await res.json();
+        this.setClients(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend offline, falling back to local clients database:", e);
+    }
+    return this.getClients();
   }
 
   async quarantineClient(clientId: string): Promise<NetworkClient> {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const clients = this.getClients();
-        const index = clients.findIndex((c) => c.id === clientId);
-        if (index === -1) return reject(new Error('Client not found'));
+    try {
+      const res = await fetch(`${API_BASE_URL}/clients/${clientId}/quarantine`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend quarantine failed, falling back to local quarantine:", e);
+    }
+    const clients = this.getClients();
+    const index = clients.findIndex((c) => c.id === clientId);
+    if (index === -1) throw new Error('Client not found');
 
-        clients[index].status = 'inactive';
-        this.setClients(clients);
+    clients[index].status = 'inactive';
+    this.setClients(clients);
 
-        const alerts = this.getAlerts();
-        alerts.unshift({
-          id: 'alert-' + Math.random().toString(36).substring(7),
-          severity: 'warning',
-          message: `Client "${clients[index].name}" has been quarantined and isolated from VLAN ${clients[index].vlanId}.`,
-          timestamp: new Date().toISOString(),
-          resolved: false,
-          category: 'security'
-        });
-        this.setAlerts(alerts);
-
-        resolve(clients[index]);
-      }, 500);
+    const alerts = this.getAlerts();
+    alerts.unshift({
+      id: 'alert-' + Math.random().toString(36).substring(7),
+      severity: 'warning',
+      message: `Client "${clients[index].name}" has been quarantined and isolated from VLAN ${clients[index].vlanId}.`,
+      timestamp: new Date().toISOString(),
+      resolved: false,
+      category: 'security'
     });
+    this.setAlerts(alerts);
+
+    return clients[index];
   }
 
   // VLANs
   async fetchVlans(): Promise<Vlan[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getVlans()), 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/vlans`);
+      if (res.ok) {
+        const data = await res.json();
+        this.setVlans(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend offline, falling back to local VLANs database:", e);
+    }
+    return this.getVlans();
   }
 
   async addVlan(vlan: Omit<Vlan, 'activeLeasesCount'>): Promise<Vlan> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const vlans = this.getVlans();
-        const newVlan: Vlan = { ...vlan, activeLeasesCount: 0 };
-        vlans.push(newVlan);
-        this.setVlans(vlans);
-        resolve(newVlan);
-      }, 400);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/vlans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vlan)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend VLAN add failed, falling back to local:", e);
+    }
+    const vlans = this.getVlans();
+    const newVlan: Vlan = { ...vlan, activeLeasesCount: 0 };
+    vlans.push(newVlan);
+    this.setVlans(vlans);
+    return newVlan;
   }
 
   async deleteVlan(vlanId: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const vlans = this.getVlans();
-        const filtered = vlans.filter((v) => v.id !== vlanId);
-        this.setVlans(filtered);
-        resolve(true);
-      }, 400);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/vlans/${vlanId}`, { method: 'DELETE' });
+      if (res.ok) return true;
+    } catch (e) {
+      console.warn("Backend VLAN delete failed, falling back to local:", e);
+    }
+    const vlans = this.getVlans();
+    const filtered = vlans.filter((v) => v.id !== vlanId);
+    this.setVlans(filtered);
+    return true;
   }
 
   // DHCP Leases
   async fetchDhcpLeases(): Promise<DhcpLease[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getDhcpLeases()), 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/dhcp/leases`);
+      if (res.ok) {
+        const data = await res.json();
+        this.setDhcpLeases(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend offline, falling back to local leases database:", e);
+    }
+    return this.getDhcpLeases();
   }
 
   async addStaticReservation(reservation: Omit<DhcpLease, 'leaseTime'>): Promise<DhcpLease> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const leases = this.getDhcpLeases();
-        const newLease: DhcpLease = { ...reservation, leaseTime: 'Infinite (Static reservation)' };
-        leases.push(newLease);
-        this.setDhcpLeases(leases);
-        resolve(newLease);
-      }, 500);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/dhcp/reservations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reservation)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend lease reservation failed, falling back to local:", e);
+    }
+    const leases = this.getDhcpLeases();
+    const newLease: DhcpLease = { ...reservation, leaseTime: 'Infinite (Static reservation)' };
+    leases.push(newLease);
+    this.setDhcpLeases(leases);
+    return newLease;
   }
 
   // SSIDs
   async fetchSsids(): Promise<SsidConfig[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getSsids()), 300);
-    });
+    return this.getSsids();
   }
 
   async saveSsid(ssid: SsidConfig): Promise<SsidConfig> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const ssids = this.getSsids();
-        const index = ssids.findIndex((s) => s.id === ssid.id);
-        if (index === -1) {
-          const newSsid = { ...ssid, id: 'ssid-' + Math.random().toString(36).substring(7), clientsCount: 0 };
-          ssids.push(newSsid);
-          this.setSsids(ssids);
-          resolve(newSsid);
-        } else {
-          ssids[index] = ssid;
-          this.setSsids(ssids);
-          resolve(ssid);
-        }
-      }, 500);
-    });
+    const ssids = this.getSsids();
+    const index = ssids.findIndex((s) => s.id === ssid.id);
+    if (index === -1) {
+      const newSsid = { ...ssid, id: 'ssid-' + Math.random().toString(36).substring(7), clientsCount: 0 };
+      ssids.push(newSsid);
+      this.setSsids(ssids);
+      return newSsid;
+    } else {
+      ssids[index] = ssid;
+      this.setSsids(ssids);
+      return ssid;
+    }
   }
 
   async toggleSsidStatus(id: string): Promise<SsidConfig> {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const ssids = this.getSsids();
-        const index = ssids.findIndex((s) => s.id === id);
-        if (index === -1) return reject(new Error('SSID not found'));
-        
-        ssids[index].status = ssids[index].status === 'active' ? 'inactive' : 'active';
-        this.setSsids(ssids);
-        resolve(ssids[index]);
-      }, 300);
-    });
+    const ssids = this.getSsids();
+    const index = ssids.findIndex((s) => s.id === id);
+    if (index === -1) throw new Error('SSID not found');
+    
+    ssids[index].status = ssids[index].status === 'active' ? 'inactive' : 'active';
+    this.setSsids(ssids);
+    return ssids[index];
   }
 
   // Alerts
   async fetchAlerts(): Promise<NetworkAlert[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getAlerts()), 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/alerts`);
+      if (res.ok) {
+        const data = await res.json();
+        this.setAlerts(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend offline, falling back to local alerts database:", e);
+    }
+    return this.getAlerts();
   }
 
   async resolveAlert(alertId: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const alerts = this.getAlerts();
-        const index = alerts.findIndex((a) => a.id === alertId);
-        if (index !== -1) {
-          alerts[index].resolved = true;
-          this.setAlerts(alerts);
-        }
-        resolve(true);
-      }, 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/alerts/${alertId}/resolve`, { method: 'POST' });
+      if (res.ok) return true;
+    } catch (e) {
+      console.warn("Backend alert resolution failed, falling back to local:", e);
+    }
+    const alerts = this.getAlerts();
+    const index = alerts.findIndex((a) => a.id === alertId);
+    if (index !== -1) {
+      alerts[index].resolved = true;
+      this.setAlerts(alerts);
+    }
+    return true;
   }
 
   // AI Center Insights
   async fetchInsights(): Promise<AiInsight[]> {
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(this.getInsights()), 300);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/ai/insights`);
+      if (res.ok) {
+        const data = await res.json();
+        this.setInsights(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend offline, falling back to local insights database:", e);
+    }
+    return this.getInsights();
   }
 
   async applyInsightAction(insightId: string): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const insights = this.getInsights();
-        const index = insights.findIndex((i) => i.id === insightId);
-        if (index === -1) return reject(new Error('Insight not found'));
-        
-        insights[index].status = 'applied';
-        this.setInsights(insights);
-
-        // Perform mock adjustments based on applied optimization
-        if (insightId === 'insight-1') {
-          // Channel interference optimization
-          const devices = this.getDevices();
-          const ap2Index = devices.findIndex((d) => d.id === 'dev-ap-2');
-          if (ap2Index !== -1) {
-            devices[ap2Index].healthScore = 99; // Restored health
-            this.setDevices(devices);
-          }
-        } else if (insightId === 'insight-2') {
-          // Quarantine/Rate limit anomaly
-          const clients = this.getClients();
-          const xpsIndex = clients.findIndex((c) => c.id === 'cli-6');
-          if (xpsIndex !== -1) {
-            clients[xpsIndex].rxRate = 10.0; // Throttled
-            clients[xpsIndex].txRate = 5.0;
-            this.setClients(clients);
-          }
-          const devices = this.getDevices();
-          const switchIndex = devices.findIndex((d) => d.id === 'dev-as-2');
-          if (switchIndex !== -1) {
-            devices[switchIndex].cpuUsage = 18; // Restored normal load
-            devices[switchIndex].healthScore = 96;
-            this.setDevices(devices);
-          }
-        }
-
-        resolve(true);
-      }, 600);
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/ai/insights/${insightId}/apply`, { method: 'POST' });
+      if (res.ok) return true;
+    } catch (e) {
+      console.warn("Backend apply insight failed, falling back to local:", e);
+    }
+    const insights = this.getInsights();
+    const index = insights.findIndex((i) => i.id === insightId);
+    if (index === -1) throw new Error('Insight not found');
+    
+    insights[index].status = 'applied';
+    this.setInsights(insights);
+    return true;
   }
 
   // Local rule-based AI NLP Parser
   async queryAiChat(prompt: string): Promise<{ text: string; data?: any }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/ai/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.warn("Backend AI query failed, falling back to local query parsing:", e);
+    }
     return new Promise((resolve) => {
       setTimeout(() => {
         const query = prompt.toLowerCase();

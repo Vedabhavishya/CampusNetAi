@@ -5,6 +5,7 @@ import {
   Organization, Site, Building, DiscoveredDevice, FirmwareStatus, MaintenanceConfig, BackupVersion
 } from '../types';
 import { useAuth } from './AuthContext';
+import { api } from '../services/api';
 
 interface NetworkStoreContextType {
   organizations: Organization[];
@@ -816,18 +817,12 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Claim and Onboard Hardware Node: ${device.name}`,
       ['CN-BORDER-CONTROLLER'],
       async () => {
-        const newDev: NetworkDevice = {
+        const onboarded = await api.onboardDevice({
           ...device,
-          id: 'dev-' + Math.random().toString(36).substring(7),
-          macAddress: device.macAddress.toUpperCase(),
-          healthScore: 100,
-          cpuUsage: 4,
-          memoryUsage: 12,
-          clientsCount: 0,
-          uptime: '0 mins'
-        };
-        setDevices(prev => [...prev, newDev]);
-        return newDev;
+          macAddress: device.macAddress.toUpperCase()
+        });
+        setDevices(prev => [...prev, onboarded]);
+        return onboarded;
       }
     );
   };
@@ -846,6 +841,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Decommission Hardware Device: ${dev.name}`,
       [dev.name],
       async () => {
+        await api.deleteDevice(deviceId);
         setDevices(prev => prev.filter(d => d.id !== deviceId));
         return true;
       }
@@ -1086,9 +1082,9 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Create global VLAN Trunk Profile: ${vlan.name} (VLAN ${vlan.id})`,
       ['CN-CS-01-SPINE', 'CN-AS-01-FLOOR1', 'CN-AS-02-FLOOR2'],
       async () => {
-        const newVlan: Vlan = { ...vlan, activeLeasesCount: 0 };
-        setVlans(prev => [...prev, newVlan]);
-        return newVlan;
+        const added = await api.addVlan(vlan);
+        setVlans(prev => [...prev, added]);
+        return added;
       }
     );
   };
@@ -1118,6 +1114,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Remove global VLAN Trunk Profile: VLAN ${vlanId}`,
       ['CN-CS-01-SPINE', 'CN-AS-01-FLOOR1', 'CN-AS-02-FLOOR2'],
       async () => {
+        await api.deleteVlan(vlanId);
         setVlans(prev => prev.filter(v => v.id !== vlanId));
         return true;
       }
@@ -1130,6 +1127,10 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Rename VLAN ${vlanId} to ${newName}`,
       ['CN-CS-01-SPINE'],
       async () => {
+        const existing = vlans.find(v => v.id === vlanId);
+        if (existing) {
+          await api.addVlan({ ...existing, name: newName });
+        }
         setVlans(prev => prev.map(v => v.id === vlanId ? { ...v, name: newName } : v));
         return true;
       }
@@ -1154,38 +1155,38 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Configure Switch port ${portKey} interface profile on ${dev.name}`,
       [dev.name],
       async () => {
+        const updatedPort = {
+          ...portData,
+          enabled: config.enabled !== undefined ? config.enabled : portData.enabled,
+          vlan: config.vlanId !== undefined ? config.vlanId : portData.vlan,
+          poe: config.poe !== undefined ? config.poe : portData.poe
+        };
+        const updatedInterfaces = {
+          ...dev.config.interfaces,
+          [portKey]: updatedPort
+        } as Record<string, { enabled: boolean; vlan: number; speed: string; poe?: boolean }>;
+
+        await api.updateDeviceConfig(deviceId, { interfaces: updatedInterfaces });
+
         setDevices(prev =>
           prev.map(d => {
             if (d.id === deviceId && d.config.interfaces) {
-              const currentPort = d.config.interfaces[portKey];
-              const updatedPort = {
-                ...currentPort,
-                enabled: config.enabled !== undefined ? config.enabled : currentPort.enabled,
-                vlan: config.vlanId !== undefined ? config.vlanId : currentPort.vlan,
-                poe: config.poe !== undefined ? config.poe : currentPort.poe
-              };
               return {
                 ...d,
                 config: {
                   ...d.config,
-                  interfaces: {
-                    ...d.config.interfaces,
-                    [portKey]: updatedPort
-                  }
+                  interfaces: updatedInterfaces
                 }
-              };
+              } as NetworkDevice;
             }
             return d;
           })
         );
 
-        // Port override side effect: if port is disabled, disconnect wired clients connected on it!
         if (config.enabled === false) {
           setClients(prev =>
             prev.map(c => {
               if (c.connectionType === 'wired' && c.connectedToDeviceId === deviceId) {
-                // If it was connected on this switch, check port matches client mapping logic (simulated link)
-                // Let's set matching wired clients on this switch to inactive
                 if (portKey === 'ge0' && c.id === 'cli-3') return { ...c, status: 'inactive' };
                 if (portKey === 'ge1' && c.id === 'cli-4') return { ...c, status: 'inactive' };
               }
@@ -1208,19 +1209,8 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       `Quarantine client and drop connection: ${client.name}`,
       [client.connectedToDeviceName],
       async () => {
-        setClients(prev => prev.map(c => c.id === clientId ? { ...c, status: 'inactive' } : c));
-        
-        setAlerts(prev => [
-          {
-            id: 'alert-' + Math.random().toString(36).substring(7),
-            severity: 'warning',
-            message: `Operator quarantined client host ${client.name} (${client.macAddress}) due to high security alert correlation.`,
-            timestamp: new Date().toISOString(),
-            resolved: false,
-            category: 'security'
-          },
-          ...prev
-        ]);
+        const quarantined = await api.quarantineClient(clientId);
+        setClients(prev => prev.map(c => c.id === clientId ? quarantined : c));
         return true;
       }
     );
@@ -1530,6 +1520,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const resolveAlert = async (alertId: string): Promise<boolean> => {
+    await api.resolveAlert(alertId);
     setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, resolved: true } : a));
     return true;
   };

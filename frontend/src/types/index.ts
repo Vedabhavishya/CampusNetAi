@@ -45,6 +45,14 @@ export interface NetworkDevice {
   firmwareInfo?: FirmwareStatus;
   maintenanceConfig?: MaintenanceConfig;
   backupHistory?: BackupVersion[];
+  
+  // Rich telemetry fields from backend collectors
+  collector?: any;
+  inventory?: any;
+  health?: any;
+  telemetry?: any;
+  performance?: any;
+  raw?: any;
 }
 
 export interface NetworkClient {

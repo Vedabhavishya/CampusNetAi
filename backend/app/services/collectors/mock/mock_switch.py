@@ -1,7 +1,7 @@
 import random
 
 class MockCoreSwitchCollector:
-    def collect_status(self, ip_address: str, mac_address: str, config: dict = None) -> dict:
+    def collect_status(self, ip_address: str, mac_address: str, config: dict = None, *args, **kwargs) -> dict:
         return {
             "status": "online",
             "health_score": 99,
@@ -26,7 +26,7 @@ class MockCoreSwitchCollector:
 
 
 class MockAccessSwitchCollector:
-    def collect_status(self, ip_address: str, mac_address: str, config: dict = None) -> dict:
+    def collect_status(self, ip_address: str, mac_address: str, config: dict = None, *args, **kwargs) -> dict:
         poe_watts = random.randint(90, 130)
         return {
             "status": "online",

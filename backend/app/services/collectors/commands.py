@@ -22,6 +22,19 @@ EX_COMMANDS = {
     "lldp": "show lldp neighbors"
 }
 
+EX4100_COMMANDS = {
+    "version": "show version",
+    "uptime": "show system uptime",
+    "routing_engine": "show chassis routing-engine",
+    "interfaces": "show interfaces terse",
+    "vlans": "show vlans",
+    "mac_table": "show ethernet-switching table",
+    "lldp": "show lldp neighbors",
+    "interface_stats": "show interfaces extensive"
+}
+
+EX2300_COMMANDS = EX4100_COMMANDS
+
 # Future Standalone AP Command Registry Placeholder
 AP_COMMANDS = {
     "version": "uname -a",

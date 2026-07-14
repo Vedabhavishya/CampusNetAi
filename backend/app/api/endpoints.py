@@ -14,6 +14,8 @@ from ..models.models import DbUser, DbDevice, DbClient, DbVlan, DbDhcpLease, DbA
 from ..schemas.schemas import Token, LoginRequest, DeviceOut, DeviceConfigUpdate, DeviceOnboard, ClientOut, VlanOut, VlanCreate, DhcpLeaseOut, DhcpReservationCreate, AlertOut, InsightOut, AiQueryRequest, AiQueryResponse
 from ..services.collectors import collector_registry, telemetry_cache
 from ..services.ai_engine import local_ai_engine
+from ..services.interface_utils import is_physical_switch_port
+import re
 
 router = APIRouter()
 
@@ -121,16 +123,42 @@ def get_devices(db: Session = Depends(get_db), current_user: DbUser = Depends(ge
                 
                 # Interfaces mapping
                 if "interfaces" in telemetry:
-                    if "interfaces" not in config:
-                        config["interfaces"] = {}
-                    for i in telemetry["interfaces"]:
+                    new_interfaces = {}
+                    interfaces_config = config.get("interfaces", {})
+                    
+                    # Determine order of interfaces: preserve list order, sort dict naturally
+                    raw_list = telemetry["interfaces"]
+                    if isinstance(raw_list, dict):
+                        sorted_keys = sorted(
+                            raw_list.keys(),
+                            key=lambda x: int(re.search(r"(\d+)$", x).group(1)) if re.search(r"(\d+)$", x) else 0
+                        )
+                        sorted_items = [{"interface": k, **(raw_list[k] if isinstance(raw_list[k], dict) else {})} for k in sorted_keys]
+                    elif isinstance(raw_list, list):
+                        sorted_items = raw_list
+                    else:
+                        sorted_items = []
+                        
+                    available_interfaces = [item["interface"] for item in sorted_items if isinstance(item, dict) and "interface" in item]
+                    
+                    for i in sorted_items:
+                        if not isinstance(i, dict) or "interface" not in i:
+                            continue
                         iface_name = i["interface"]
-                        config["interfaces"][iface_name] = {
+                        
+                        # Skip non-configurable physical switch ports
+                        if not is_physical_switch_port(iface_name, available_interfaces):
+                            continue
+                            
+                        existing = interfaces_config.get(iface_name, {})
+                        new_interfaces[iface_name] = {
+                            **existing,
                             "enabled": i["admin"] == "up",
                             "link": i["link"],
                             "ip": i["ip"],
-                            "speed": "1000Mbps"
+                            "speed": existing.get("speed", "1000Mbps")
                         }
+                    config["interfaces"] = new_interfaces
                 
                 # Zones mapping
                 if "zones" in telemetry:
@@ -178,7 +206,13 @@ def get_devices(db: Session = Depends(get_db), current_user: DbUser = Depends(ge
                     cpuUsage=cpu_usage,
                     memoryUsage=memory_usage,
                     clientsCount=clients_count,
-                    config=config
+                    config=config,
+                    collector=cached.get("collector"),
+                    inventory=cached.get("inventory"),
+                    health=cached.get("health"),
+                    telemetry=cached.get("telemetry"),
+                    performance=cached.get("performance") or (cached.get("telemetry", {}).get("performance") if isinstance(cached.get("telemetry"), dict) else None),
+                    raw=cached.get("raw")
                 )
             )
         else:
@@ -263,6 +297,7 @@ def update_device_config(device_id: str, config_update: DeviceConfigUpdate, db: 
     
     db.commit()
     db.refresh(device)
+    cached = telemetry_cache.get(device.id) or {}
     return DeviceOut(
         id=device.id,
         name=device.name,
@@ -277,7 +312,13 @@ def update_device_config(device_id: str, config_update: DeviceConfigUpdate, db: 
         cpuUsage=device.cpu_usage,
         memoryUsage=device.memory_usage,
         clientsCount=device.clients_count,
-        config=device.config
+        config=device.config,
+        collector=cached.get("collector"),
+        inventory=cached.get("inventory"),
+        health=cached.get("health"),
+        telemetry=cached.get("telemetry"),
+        performance=cached.get("performance") or (cached.get("telemetry", {}).get("performance") if isinstance(cached.get("telemetry"), dict) else None),
+        raw=cached.get("raw")
     )
 
 @router.post("/devices/onboard", response_model=DeviceOut)

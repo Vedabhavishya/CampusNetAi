@@ -39,7 +39,7 @@ export const DeviceDetailDrawer: React.FC<DeviceDetailDrawerProps> = ({ device, 
   } = useNetworkStore();
   
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'interfaces' | 'ports' | 'performance' | 'configuration' | 'terminal' |
+    'overview' | 'interfaces' | 'ports' | 'performance' | 'telemetry' | 'configuration' | 'terminal' |
     'topology' | 'clients' | 'history' | 'firmware' | 'maintenance' | 'audit' | 'tasks' | 'diagnostics'
   >('overview');
 
@@ -287,15 +287,79 @@ Uptime: ${device.uptime}`;
     setCliLogs([...newLogs, output, '']);
   };
 
-  // Mock Performance Data
-  const performanceData = [
-    { time: '10:00', cpu: device.cpuUsage - 4, mem: device.memoryUsage - 1, latency: 12 },
-    { time: '10:05', cpu: device.cpuUsage + 3, mem: device.memoryUsage, latency: 14 },
-    { time: '10:10', cpu: device.cpuUsage - 7, mem: device.memoryUsage + 1, latency: 11 },
-    { time: '10:15', cpu: device.cpuUsage, mem: device.memoryUsage, latency: 13 },
-    { time: '10:20', cpu: device.cpuUsage + 8, mem: device.memoryUsage - 2, latency: 16 },
-    { time: '10:25', cpu: device.cpuUsage, mem: device.memoryUsage, latency: 12 }
-  ];
+  // Mock & Live Performance Data mapping
+  const performanceData = useMemo(() => {
+    if (device && device.performance && Array.isArray(device.performance.history) && device.performance.history.length > 0) {
+      return device.performance.history.map((h: any) => {
+        let timeLabel = '';
+        try {
+          if (h.timestamp) {
+            const date = new Date(h.timestamp);
+            timeLabel = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+          }
+        } catch (e) {}
+        
+        return {
+          time: timeLabel || 'Now',
+          cpu: device.cpuUsage || 10,
+          mem: device.memoryUsage || 20,
+          latency: h.ssh_latency_ms || 0,
+          duration: h.poll_duration_ms || 0
+        };
+      });
+    }
+    
+    return [
+      { time: '10:00', cpu: device.cpuUsage - 4, mem: device.memoryUsage - 1, latency: 12 },
+      { time: '10:05', cpu: device.cpuUsage + 3, mem: device.memoryUsage, latency: 14 },
+      { time: '10:10', cpu: device.cpuUsage - 7, mem: device.memoryUsage + 1, latency: 11 },
+      { time: '10:15', cpu: device.cpuUsage, mem: device.memoryUsage, latency: 13 },
+      { time: '10:20', cpu: device.cpuUsage + 8, mem: device.memoryUsage - 2, latency: 16 },
+      { time: '10:25', cpu: device.cpuUsage, mem: device.memoryUsage, latency: 12 }
+    ];
+  }, [device]);
+
+  // Helper getters using a safe field resolution strategy
+  const resolvedHealth = useMemo(() => {
+    if (device.healthScore !== undefined && device.healthScore !== null) return device.healthScore;
+    if (device.health?.health_score !== undefined && device.health?.health_score !== null) return device.health.health_score;
+    return null;
+  }, [device]);
+
+  const resolvedCpu = useMemo(() => {
+    if (device.cpuUsage !== undefined && device.cpuUsage !== null) return `${device.cpuUsage}%`;
+    return '--';
+  }, [device]);
+
+  const resolvedMemory = useMemo(() => {
+    if (device.memoryUsage !== undefined && device.memoryUsage !== null) return `${device.memoryUsage}%`;
+    return '--';
+  }, [device]);
+
+  const resolvedTemperature = useMemo(() => {
+    if (device.temperature !== undefined && device.temperature !== null) return `${device.temperature}°C`;
+    return '--';
+  }, [device]);
+
+  const resolvedSshLatency = useMemo(() => {
+    if (device.health?.ssh_latency_ms !== undefined && device.health?.ssh_latency_ms !== null) {
+      return `${device.health.ssh_latency_ms} ms`;
+    }
+    if (device.performance?.current?.ssh_latency_ms !== undefined && device.performance?.current?.ssh_latency_ms !== null) {
+      return `${device.performance.current.ssh_latency_ms} ms`;
+    }
+    return '--';
+  }, [device]);
+
+  const resolvedPollDuration = useMemo(() => {
+    if (device.health?.poll_duration_ms !== undefined && device.health?.poll_duration_ms !== null) {
+      return `${device.health.poll_duration_ms} ms`;
+    }
+    if (device.performance?.current?.poll_duration_ms !== undefined && device.performance?.current?.poll_duration_ms !== null) {
+      return `${device.performance.current.poll_duration_ms} ms`;
+    }
+    return '--';
+  }, [device]);
 
   return (
     <Drawer isOpen={isOpen} onClose={onClose} title={device.name} size="lg">
@@ -304,17 +368,19 @@ Uptime: ${device.uptime}`;
         {/* Row 1: Health Summary Panel Grid */}
         <div className="grid grid-cols-3 md:grid-cols-6 gap-3.5 border-b border-slate-200/50 dark:border-slate-800/80 pb-4 text-left">
           <div className="p-3 bg-slate-500/5 border border-slate-200/10 rounded-2xl flex items-center gap-3">
-            <HealthIndicator score={device.healthScore} size="md" />
+            <HealthIndicator score={resolvedHealth !== null ? resolvedHealth : 100} size="md" />
             <div>
               <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Health</p>
-              <h4 className="text-sm font-extrabold text-slate-800 dark:text-white mt-0.5">{device.healthScore}%</h4>
+              <h4 className="text-sm font-extrabold text-slate-800 dark:text-white mt-0.5">
+                {resolvedHealth !== null ? `${resolvedHealth}%` : '--'}
+              </h4>
             </div>
           </div>
           
           {[
-            { label: 'CPU Usage', val: `${device.cpuUsage}%`, sub: 'Core Load', icon: Cpu, color: 'text-brand-500' },
-            { label: 'Memory', val: `${device.memoryUsage}%`, sub: 'RAM Load', icon: HardDrive, color: 'text-blue-500' },
-            { label: 'Temperature', val: `${device.temperature || 42}°C`, sub: 'Chassis Temp', icon: Thermometer, color: 'text-amber-500' },
+            { label: 'CPU Usage', val: resolvedCpu, sub: 'Core Load', icon: Cpu, color: 'text-brand-500' },
+            { label: 'Memory', val: resolvedMemory, sub: 'RAM Load', icon: HardDrive, color: 'text-blue-500' },
+            { label: 'Temperature', val: resolvedTemperature, sub: 'Chassis Temp', icon: Thermometer, color: 'text-amber-500' },
             { label: 'Power Supply', val: device.powerStatus || 'Healthy', sub: 'Dual Feed', icon: Zap, color: 'text-emerald-500' },
             { label: 'SLA Availability', val: `${device.availability || 99.9}%`, sub: 'Target: 99.9%', icon: Activity, color: 'text-teal-500' }
           ].map((stat, idx) => (
@@ -360,6 +426,7 @@ Uptime: ${device.uptime}`;
               { id: 'interfaces', label: 'Interfaces' },
               { id: 'ports', label: 'Ports Map' },
               { id: 'performance', label: 'Performance' },
+              { id: 'telemetry', label: 'Live Telemetry' },
               { id: 'configuration', label: 'Configuration' },
               { id: 'terminal', label: 'CLI Terminal' },
               { id: 'diagnostics', label: 'Diagnostics Center' },
@@ -495,6 +562,30 @@ Uptime: ${device.uptime}`;
           {/* PERFORMANCE TAB */}
           {activeTab === 'performance' && (
             <Card title="Live Hardware Load Performance" description="CPU utilization and latency history metrics:">
+              {device.performance?.current && (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4 font-sans text-xs text-left">
+                  <div className="bg-slate-500/5 border border-slate-200/10 p-3 rounded-xl">
+                    <p className="text-slate-400 font-medium">SSH Latency</p>
+                    <p className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">{resolvedSshLatency}</p>
+                  </div>
+                  <div className="bg-slate-500/5 border border-slate-200/10 p-3 rounded-xl">
+                    <p className="text-slate-400 font-medium">Poll Duration</p>
+                    <p className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">{resolvedPollDuration}</p>
+                  </div>
+                  <div className="bg-slate-500/5 border border-slate-200/10 p-3 rounded-xl">
+                    <p className="text-slate-400 font-medium">Cmds Executed</p>
+                    <p className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">{device.performance.current.commands_executed}</p>
+                  </div>
+                  <div className="bg-slate-500/5 border border-slate-200/10 p-3 rounded-xl">
+                    <p className="text-slate-400 font-medium">Cmds Failed</p>
+                    <p className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">{device.performance.current.commands_failed}</p>
+                  </div>
+                  <div className="bg-slate-500/5 border border-slate-200/10 p-3 rounded-xl col-span-2 sm:col-span-1">
+                    <p className="text-slate-400 font-medium">Bytes Received</p>
+                    <p className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">{device.performance.current.total_bytes_received || 0} B</p>
+                  </div>
+                </div>
+              )}
               <div className="h-56 w-full pt-2">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={performanceData}>
@@ -513,6 +604,204 @@ Uptime: ${device.uptime}`;
                 </ResponsiveContainer>
               </div>
             </Card>
+          )}
+
+          {/* LIVE TELEMETRY TAB */}
+          {activeTab === 'telemetry' && (
+            <div className="space-y-6 text-left text-xs font-semibold">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Health & Collector Metadata */}
+                <Card title="Collector & Health Metadata" className="space-y-3">
+                  {device.collector ? (
+                    <>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Collector Name</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.name}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Collector Version</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.version}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Device Family</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.device_family}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Last Poll Timestamp</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.last_poll}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Poll Duration</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.poll_duration_ms} ms</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Commands Executed / Failed</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">
+                          {device.collector.commands_executed} / {device.collector.commands_failed}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-slate-400">No collector metadata available.</div>
+                  )}
+                  {device.health && (
+                    <>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10 pt-2 font-bold text-slate-700 dark:text-slate-300">
+                        <span>Connection Status</span>
+                        <span className={device.health.connected ? 'text-emerald-500 text-right' : 'text-rose-500 text-right'}>
+                          {device.health.status.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">SSH Latency</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{resolvedSshLatency}</span>
+                      </div>
+                    </>
+                  )}
+                </Card>
+
+                {/* Inventory Metadata */}
+                <Card title="Live Inventory details" className="space-y-3">
+                  {device.inventory ? (
+                    <>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Hostname</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hostname}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Vendor / Family</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.vendor} {device.inventory.family}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Model</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.model}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Serial Number</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.serial}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Software Version</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.software_version}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                        <span className="text-slate-400">Hardware Revision</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hardware_revision}</span>
+                      </div>
+                      <div className="grid grid-cols-2 py-1">
+                        <span className="text-slate-400">System Uptime</span>
+                        <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.uptime}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-slate-400">No inventory details available.</div>
+                  )}
+                </Card>
+              </div>
+
+              {/* VLANs, MAC, LLDP list from switch */}
+              {device.telemetry && (device.telemetry.vlans || device.telemetry.mac_table || device.telemetry.lldp_neighbors) && (
+                <div className="space-y-4">
+                  {device.telemetry.vlans && device.telemetry.vlans.length > 0 && (
+                    <Card title="Live Switch VLAN Domain Details" className="p-0 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200/10 text-left">
+                          <thead className="bg-slate-500/5">
+                            <tr>
+                              <th className="px-4 py-2 text-slate-400">VLAN ID</th>
+                              <th className="px-4 py-2 text-slate-400">VLAN Name</th>
+                              <th className="px-4 py-2 text-slate-400">Interfaces</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200/10 font-mono text-[11px]">
+                            {device.telemetry.vlans.map((v: any, i: number) => (
+                              <tr key={i}>
+                                <td className="px-4 py-2 font-bold">{v.vlan_id || v.id}</td>
+                                <td className="px-4 py-2">{v.name || v.vlan_name}</td>
+                                <td className="px-4 py-2">{Array.isArray(v.interfaces) ? v.interfaces.join(', ') : (v.members ? v.members.join(', ') : 'None')}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  )}
+
+                  {device.telemetry.mac_table && device.telemetry.mac_table.length > 0 && (
+                    <Card title="Live Switch MAC Table" className="p-0 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200/10 text-left">
+                          <thead className="bg-slate-500/5">
+                            <tr>
+                              <th className="px-4 py-2 text-slate-400">MAC Address</th>
+                              <th className="px-4 py-2 text-slate-400">VLAN</th>
+                              <th className="px-4 py-2 text-slate-400">Interface</th>
+                              <th className="px-4 py-2 text-slate-400">Type</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200/10 font-mono text-[11px]">
+                            {device.telemetry.mac_table.map((m: any, i: number) => (
+                              <tr key={i}>
+                                <td className="px-4 py-2 font-bold">{m.mac_address}</td>
+                                <td className="px-4 py-2">{m.vlan}</td>
+                                <td className="px-4 py-2">{m.interface}</td>
+                                <td className="px-4 py-2">{m.type || 'Dynamic'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  )}
+
+                  {device.telemetry.lldp_neighbors && device.telemetry.lldp_neighbors.length > 0 && (
+                    <Card title="Live LLDP Topology Neighbors" className="p-0 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200/10 text-left">
+                          <thead className="bg-slate-500/5">
+                            <tr>
+                              <th className="px-4 py-2 text-slate-400">Local Port</th>
+                              <th className="px-4 py-2 text-slate-400">Neighbor Hostname</th>
+                              <th className="px-4 py-2 text-slate-400">Neighbor Port</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200/10 font-mono text-[11px]">
+                            {device.telemetry.lldp_neighbors.map((n: any, i: number) => (
+                              <tr key={i}>
+                                <td className="px-4 py-2 font-bold">{n.local_interface}</td>
+                                <td className="px-4 py-2">{n.neighbor_hostname}</td>
+                                <td className="px-4 py-2">{n.neighbor_interface}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  )}
+                </div>
+              )}
+
+              {/* Raw Outputs */}
+              {device.raw && Object.keys(device.raw).length > 0 && (
+                <Card title="Raw CLI commands Outcomes" description="Expand to view exact outputs returned from the live device:">
+                  <div className="space-y-2 mt-2 font-mono text-[11px]">
+                    {Object.entries(device.raw).map(([cmd, res]: [string, any]) => (
+                      <details key={cmd} className="bg-slate-500/5 rounded-lg border border-slate-200/10 overflow-hidden">
+                        <summary className="px-4 py-2 font-bold cursor-pointer hover:bg-slate-500/10 flex justify-between select-none">
+                          <span>{cmd}</span>
+                          <span className={res.success ? 'text-emerald-500' : 'text-rose-500'}>
+                            {res.success ? 'SUCCESS' : 'FAILED'}
+                          </span>
+                        </summary>
+                        <div className="p-3 border-t border-slate-200/10 whitespace-pre overflow-x-auto max-h-48 text-[10px] text-slate-650 bg-slate-900/50">
+                          {res.output || res.error || 'Empty Output.'}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </Card>
+              )}
+            </div>
           )}
 
           {/* CONFIGURATION TAB */}

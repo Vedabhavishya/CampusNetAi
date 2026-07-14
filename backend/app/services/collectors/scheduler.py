@@ -1,11 +1,13 @@
 import asyncio
 import os
 import time
+import re
 from sqlalchemy.orm.attributes import flag_modified
 from ...core.database import SessionLocal
 from ...models.models import DbDevice
 from .collector_factory import collector_registry
 from .telemetry_cache import telemetry_cache
+from ..interface_utils import is_physical_switch_port
 
 async def start_scheduler():
     """
@@ -19,15 +21,22 @@ async def start_scheduler():
     print(f"[Scheduler] Starting polling scheduler with interval: {poll_interval}s", flush=True)
 
     while True:
+        cycle_start_time = time.time()
+        print("[Scheduler] Starting polling cycle...", flush=True)
+        
         db = SessionLocal()
         try:
             devices = db.query(DbDevice).all()
             for dev in devices:
                 try:
-                    collector = collector_registry.get_collector(dev.type)
+                    collector = collector_registry.get_collector(dev.type, dev.model)
                     # Poll the collector (uses ip_address, mac_address, config)
-                    status_data = collector.collect_status(dev.ip_address, dev.mac_address, dev.config)
+                    status_data = collector.collect_status(dev.ip_address, dev.mac_address, dev.config, device_id=dev.id)
                     
+                    # Correct collector metadata dynamically without modifying collector implementation
+                    if "collector" in status_data and isinstance(status_data["collector"], dict):
+                        status_data["collector"]["name"] = collector.__class__.__name__
+
                     # Update Memory Cache
                     telemetry_cache.set(dev.id, status_data)
 
@@ -62,16 +71,42 @@ async def start_scheduler():
                         
                         # Interfaces mapping
                         if "interfaces" in telemetry:
-                            if "interfaces" not in current_config:
-                                current_config["interfaces"] = {}
-                            for i in telemetry["interfaces"]:
+                            new_interfaces = {}
+                            interfaces_config = current_config.get("interfaces", {})
+                            
+                            # Determine order of interfaces: preserve list order, sort dict naturally
+                            raw_list = telemetry["interfaces"]
+                            if isinstance(raw_list, dict):
+                                sorted_keys = sorted(
+                                    raw_list.keys(),
+                                    key=lambda x: int(re.search(r"(\d+)$", x).group(1)) if re.search(r"(\d+)$", x) else 0
+                                )
+                                sorted_items = [{"interface": k, **(raw_list[k] if isinstance(raw_list[k], dict) else {})} for k in sorted_keys]
+                            elif isinstance(raw_list, list):
+                                sorted_items = raw_list
+                            else:
+                                sorted_items = []
+                                
+                            available_interfaces = [item["interface"] for item in sorted_items if isinstance(item, dict) and "interface" in item]
+                            
+                            for i in sorted_items:
+                                if not isinstance(i, dict) or "interface" not in i:
+                                    continue
                                 iface_name = i["interface"]
-                                current_config["interfaces"][iface_name] = {
+                                
+                                # Skip non-configurable physical switch ports
+                                if not is_physical_switch_port(iface_name, available_interfaces):
+                                    continue
+                                    
+                                existing = interfaces_config.get(iface_name, {})
+                                new_interfaces[iface_name] = {
+                                    **existing,
                                     "enabled": i["admin"] == "up",
                                     "link": i["link"],
                                     "ip": i["ip"],
-                                    "speed": "1000Mbps"
+                                    "speed": existing.get("speed", "1000Mbps")
                                 }
+                            current_config["interfaces"] = new_interfaces
                         
                         # Zones mapping
                         if "zones" in telemetry:
@@ -109,4 +144,11 @@ async def start_scheduler():
         finally:
             db.close()
         
-        await asyncio.sleep(poll_interval)
+        cycle_duration = time.time() - cycle_start_time
+        try:
+            current_interval = int(os.getenv("POLL_INTERVAL", str(poll_interval)))
+        except ValueError:
+            current_interval = poll_interval
+            
+        print(f"[Scheduler] Polling cycle finished in {cycle_duration:.2f}s. Sleeping for {current_interval}s before next cycle.", flush=True)
+        await asyncio.sleep(current_interval)

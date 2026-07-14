@@ -201,3 +201,15 @@ class SRXParser(BaseParser):
             res["arp_entries_count"] = arp_count
             
         return res
+
+    def parse_vlans(self, vlans_out: str) -> list:
+        return []
+
+    def parse_mac_table(self, mac_table_out: str) -> list:
+        return []
+
+    def parse_lldp(self, lldp_out: str) -> list:
+        return []
+
+    def parse_interface_stats(self, interface_stats_out: str) -> dict:
+        return {}
