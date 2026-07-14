@@ -35,7 +35,7 @@ export const SecurityCenter: React.FC = () => {
     if (isReadOnly || !mac) return;
     return runProvisioningTask(
       `Apply Blackhole MAC Policy: Block ${mac}`,
-      ['CN-FW-01-BORDER'],
+      ['srx300 firewall'],
       async () => {
         setBlockedMacs(prev => [...new Set([...prev, mac.toUpperCase()])]);
         setMacInput('');
@@ -48,7 +48,7 @@ export const SecurityCenter: React.FC = () => {
     if (isReadOnly) return;
     return runProvisioningTask(
       `Lift Blackhole MAC Policy: Allow ${mac}`,
-      ['CN-FW-01-BORDER'],
+      ['srx300 firewall'],
       async () => {
         setBlockedMacs(prev => prev.filter(x => x !== mac));
         return true;
@@ -60,7 +60,7 @@ export const SecurityCenter: React.FC = () => {
     if (isReadOnly || !mac) return;
     return runProvisioningTask(
       `Restrict network segment: Quarantine ${mac}`,
-      ['CN-FW-01-BORDER', 'CN-CS-01-SPINE'],
+      ['srx300 firewall', 'ex4100 router'],
       async () => {
         setQuarantinedMacs(prev => [...new Set([...prev, mac.toUpperCase()])]);
         setMacInput('');
@@ -73,7 +73,7 @@ export const SecurityCenter: React.FC = () => {
     if (isReadOnly) return;
     return runProvisioningTask(
       `Lift quarantine restriction on client host: ${mac}`,
-      ['CN-FW-01-BORDER', 'CN-CS-01-SPINE'],
+      ['srx300 firewall', 'ex4100 router'],
       async () => {
         setQuarantinedMacs(prev => prev.filter(x => x !== mac));
         return true;

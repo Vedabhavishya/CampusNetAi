@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { 
   NetworkDevice, NetworkClient, Vlan, DhcpLease, SsidConfig, NetworkAlert, 
   AiInsight, User, AuditLog, ProvisioningTask, ConfigTemplate, AutomationRule, HealthScores,
@@ -86,7 +86,7 @@ const defaultBuildings: Building[] = [
 const defaultDevices: NetworkDevice[] = [
   {
     id: 'dev-fw-1',
-    name: 'CN-FW-01-BORDER',
+    name: 'srx300 firewall',
     type: 'firewall',
     ipAddress: '10.10.10.1',
     macAddress: '00:0B:82:11:A3:F1',
@@ -114,7 +114,7 @@ const defaultDevices: NetworkDevice[] = [
   },
   {
     id: 'dev-cs-1',
-    name: 'CN-CS-01-SPINE',
+    name: 'ex4100 router',
     type: 'core_switch',
     ipAddress: '10.10.10.2',
     macAddress: '00:0B:82:22:B4:02',
@@ -125,7 +125,7 @@ const defaultDevices: NetworkDevice[] = [
     healthScore: 99,
     cpuUsage: 8,
     memoryUsage: 42,
-    clientsCount: 5,
+    clientsCount: 42,
     config: {
       interfaces: {
         'xe0': { enabled: true, vlan: 10, speed: '10Gbps' },
@@ -137,7 +137,7 @@ const defaultDevices: NetworkDevice[] = [
   },
   {
     id: 'dev-as-1',
-    name: 'CN-AS-01-FLOOR1',
+    name: 'ex2300 switch',
     type: 'access_switch',
     ipAddress: '10.10.10.10',
     macAddress: '00:0B:82:33:C5:10',
@@ -275,66 +275,15 @@ const defaultClients: NetworkClient[] = [
     vlanId: 30,
     os: 'iOS 17',
     band: '5GHz'
-  },
-  {
-    id: 'cli-3',
-    name: 'Finance-Desktop-01',
-    macAddress: '00:15:5D:83:B2:1A',
-    ipAddress: '10.10.10.122',
-    connectionType: 'wired',
-    status: 'active',
-    rxRate: 980.0,
-    txRate: 750.0,
-    connectedToDeviceId: 'dev-as-1',
-    connectedToDeviceName: 'CN-AS-01-FLOOR1',
-    vlanId: 10,
-    os: 'Windows 11 Enterprise'
-  },
-  {
-    id: 'cli-4',
-    name: 'Zebra-LabelPrinter-04',
-    macAddress: '00:07:4D:44:A2:8E',
-    ipAddress: '10.10.40.10',
-    connectionType: 'wired',
-    status: 'active',
-    rxRate: 0.2,
-    txRate: 0.1,
-    connectedToDeviceId: 'dev-as-1',
-    connectedToDeviceName: 'CN-AS-01-FLOOR1',
-    vlanId: 40,
-    os: 'Embedded Linux'
-  },
-  {
-    id: 'cli-5',
-    name: 'Hvac-Controller-West',
-    macAddress: 'E0:F2:C4:88:51:B2',
-    ipAddress: '10.10.40.22',
-    connectionType: 'wireless',
-    status: 'active',
-    rxRate: 1.5,
-    txRate: 0.8,
-    signalStrength: -72,
-    connectedToDeviceId: 'dev-ap-2',
-    connectedToDeviceName: 'CN-AP-02-CONF-A',
-    vlanId: 40,
-    os: 'FreeRTOS',
-    band: '2.4GHz'
   }
 ];
 
-const defaultVlans: Vlan[] = [
-  { id: 10, name: 'VLAN_MGMT_NET', subnet: '10.10.10.0/24', dhcpRange: '10.10.10.50 - 10.10.10.250', dnsServers: ['1.1.1.1', '8.8.8.8'], activeLeasesCount: 2 },
-  { id: 20, name: 'VLAN_CORP_NET', subnet: '10.10.20.0/24', dhcpRange: '10.10.20.20 - 10.10.20.254', dnsServers: ['10.10.10.2', '1.1.1.1'], activeLeasesCount: 1 },
-  { id: 30, name: 'VLAN_GUEST_NET', subnet: '10.10.30.0/24', dhcpRange: '10.10.30.10 - 10.10.30.254', dnsServers: ['8.8.8.8', '8.8.4.4'], activeLeasesCount: 1 },
-  { id: 40, name: 'VLAN_IOT_NET', subnet: '10.10.40.0/24', dhcpRange: '10.10.40.100 - 10.10.40.200', dnsServers: ['1.1.1.1'], activeLeasesCount: 2 }
-];
+const defaultVlans: Vlan[] = [];
+
 
 const defaultDhcpLeases: DhcpLease[] = [
-  { id: 'lease-1', ipAddress: '10.10.10.122', macAddress: '00:15:5D:83:B2:1A', clientName: 'Finance-Desktop-01', leaseTime: '12 hours remaining', vlanId: 10 },
   { id: 'lease-2', ipAddress: '10.10.20.101', macAddress: 'F4:0F:24:D1:88:C2', clientName: 'Johns-MacBook-Pro', leaseTime: '23 hours remaining', vlanId: 20 },
-  { id: 'lease-3', ipAddress: '10.10.30.55', macAddress: 'A2:18:C4:6E:9B:40', clientName: 'Sara-iPhone-15', leaseTime: '1 hour remaining', vlanId: 30 },
-  { id: 'lease-4', ipAddress: '10.10.40.10', macAddress: '00:07:4D:44:A2:8E', clientName: 'Zebra-LabelPrinter-04', leaseTime: '8 days remaining', vlanId: 40 },
-  { id: 'lease-5', ipAddress: '10.10.40.22', macAddress: 'E0:F2:C4:88:51:B2', clientName: 'Hvac-Controller-West', leaseTime: '5 days remaining', vlanId: 40 }
+  { id: 'lease-3', ipAddress: '10.10.30.55', macAddress: 'A2:18:C4:6E:9B:40', clientName: 'Sara-iPhone-15', leaseTime: '1 hour remaining', vlanId: 30 }
 ];
 
 const defaultSsids: SsidConfig[] = [
@@ -483,7 +432,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
     {
       id: 'maint-1',
       deviceId: 'dev-as-1',
-      deviceName: 'CN-AS-01-FLOOR1',
+      deviceName: 'ex2300 switch',
       reason: 'Routine hardware memory utilization optimization & firmware staging checks.',
       startTime: new Date(Date.now() - 3600000).toISOString(),
       endTime: new Date(Date.now() + 7200000).toISOString(),
@@ -498,7 +447,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       timestamp: new Date(Date.now() - 600000).toISOString(),
       user: 'unknown_operator',
       role: 'Network Engineer',
-      device: 'CN-FW-01-BORDER',
+      device: 'srx300 firewall',
       category: 'login_failure',
       message: 'Failed SSH login attempt from external host 203.0.113.88',
       severity: 'critical'
@@ -508,7 +457,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       timestamp: new Date(Date.now() - 1200000).toISOString(),
       user: 'system',
       role: 'Kernel',
-      device: 'CN-FW-01-BORDER',
+      device: 'srx300 firewall',
       category: 'firewall_drop',
       message: 'Port Scan block: Dropped packet from WAN peer 198.51.100.4 on ge0/0',
       severity: 'high'
@@ -613,24 +562,97 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
     
     const syncBackend = async () => {
       try {
-        const res = await fetch('http://localhost:8000/api/v1/devices');
-        if (res.ok && active) {
-          const devData = await res.json();
-          if (devData && devData.length > 0) {
-            setDevices(devData);
-          }
-        }
-        
-        const cliRes = await fetch('http://localhost:8000/api/v1/clients');
-        if (cliRes.ok && active) {
-          const cliData = await cliRes.json();
-          if (cliData) setClients(cliData);
-        }
-        
+        let currentVlans = vlans;
         const vlanRes = await fetch('http://localhost:8000/api/v1/vlans');
         if (vlanRes.ok && active) {
           const vlanData = await vlanRes.json();
-          if (vlanData) setVlans(vlanData);
+          if (vlanData) {
+            setVlans(vlanData);
+            currentVlans = vlanData;
+          }
+        }
+
+        let devList: any[] = [];
+        const res = await fetch('http://localhost:8000/api/v1/devices');
+        if (res.ok && active) {
+          const devData = await res.json();
+          devList = devData;
+          if (devData && devData.length > 0) {
+            const mapped = devData.map((d: any) => {
+              if (d.type === 'core_switch') {
+                return {
+                  ...d,
+                  config: {
+                    ...d.config,
+                    vlans: currentVlans
+                  }
+                };
+              }
+              return d;
+            });
+            setDevices(mapped);
+          }
+        }
+        
+        let currentClients = clients;
+        const cliRes = await fetch('http://localhost:8000/api/v1/clients');
+        if (cliRes.ok && active) {
+          const cliData = await cliRes.json();
+          if (cliData) {
+            setClients(cliData);
+            currentClients = cliData;
+          }
+        }
+
+        // Sync SSIDs dynamically from live AP telemetry site configuration
+        if (devList && devList.length > 0) {
+          const apDevice = devList.find((d: any) => d.type === 'access_point' && d.telemetry?.wireless?.site?.wlans);
+          if (apDevice && apDevice.telemetry?.wireless?.site?.wlans) {
+            const apiWlans = apDevice.telemetry.wireless.site.wlans;
+            const mappedSsids: SsidConfig[] = apiWlans.map((w: any) => {
+              const clientsCount = currentClients.filter((c: any) => c.ssid === w.ssid).length;
+              
+              let securityType: SsidConfig['securityType'] = 'WPA3-Personal';
+              if (w.auth?.type === 'open') {
+                securityType = 'Open';
+              } else if (w.auth?.type === 'eap') {
+                securityType = 'WPA3-Enterprise';
+              } else if (w.auth?.type === 'psk') {
+                if (w.auth?.pairwise?.includes('wpa3')) {
+                  securityType = 'WPA3-Personal';
+                } else {
+                  securityType = 'WPA2-Personal';
+                }
+              }
+              
+              let band: SsidConfig['band'] = 'Dual';
+              const bands = w.bands || [];
+              if (bands.includes('24') && bands.includes('5')) {
+                band = 'Dual';
+              } else if (bands.includes('24')) {
+                band = '2.4GHz';
+              } else if (bands.includes('5')) {
+                band = '5GHz';
+              } else if (bands.includes('6')) {
+                band = '6GHz';
+              }
+              
+              return {
+                id: w.id || `ssid-${w.ssid}`,
+                ssid: w.ssid || w.name,
+                securityType,
+                band,
+                vlanId: Number(w.vlan_id || 1),
+                clientsCount,
+                maxClients: Number(w.max_clients || 250),
+                portalEnabled: w.portal?.enabled || false,
+                rateLimitRx: w.wlan_limit_down ? Math.round(w.wlan_limit_down / 1000) : undefined,
+                rateLimitTx: w.wlan_limit_up ? Math.round(w.wlan_limit_up / 1000) : undefined,
+                status: w.enabled ? 'active' : 'inactive'
+              };
+            });
+            setSsids(mappedSsids);
+          }
         }
         
         const leaseRes = await fetch('http://localhost:8000/api/v1/dhcp/leases');
@@ -643,6 +665,24 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
         if (alertRes.ok && active) {
           const alertData = await alertRes.json();
           if (alertData) setAlerts(alertData);
+        }
+
+        const insightRes = await fetch('http://localhost:8000/api/v1/ai/insights');
+        if (insightRes.ok && active) {
+          const insightData = await insightRes.json();
+          if (insightData) {
+            const mappedInsights = insightData.map((i: any) => ({
+              id: i.id,
+              category: i.category,
+              title: i.title,
+              description: i.description,
+              impact: i.impact,
+              status: i.status,
+              timestamp: i.timestamp,
+              suggestedAction: i.suggested_action
+            }));
+            setInsights(mappedInsights);
+          }
         }
       } catch (err) {
         // Backend offline fallback - keep using local memory
@@ -843,6 +883,25 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       async () => {
         await api.deleteDevice(deviceId);
         setDevices(prev => prev.filter(d => d.id !== deviceId));
+
+        // Return the device to the discovered devices list
+        const discDev: DiscoveredDevice = {
+          id: 'disc-' + Math.random().toString(36).substring(7),
+          hostname: dev.name.includes('-DISC') ? dev.name : `${dev.name.toUpperCase()}-DISC`,
+          ipAddress: dev.ipAddress,
+          macAddress: dev.macAddress,
+          vendor: dev.model.includes('SRX') ? 'Juniper Networks' : dev.model.includes('EX') ? 'Juniper Networks' : 'Juniper Mist',
+          model: dev.model.replace(' (Mock)', ''),
+          firmware: dev.version,
+          status: 'online',
+          deviceType: dev.type as any
+        };
+
+        setDiscoveredDevices(prev => {
+          if (prev.some(d => d.macAddress === discDev.macAddress)) return prev;
+          return [...prev, discDev];
+        });
+
         return true;
       }
     );
@@ -1112,7 +1171,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     return runProvisioningTask(
       `Remove global VLAN Trunk Profile: VLAN ${vlanId}`,
-      ['CN-CS-01-SPINE', 'CN-AS-01-FLOOR1', 'CN-AS-02-FLOOR2'],
+      ['ex4100 router', 'ex2300 switch', 'CN-AS-02-FLOOR2'],
       async () => {
         await api.deleteVlan(vlanId);
         setVlans(prev => prev.filter(v => v.id !== vlanId));
@@ -1125,7 +1184,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const renameVlan = async (vlanId: number, newName: string): Promise<boolean> => {
     return runProvisioningTask(
       `Rename VLAN ${vlanId} to ${newName}`,
-      ['CN-CS-01-SPINE'],
+      ['ex4100 router'],
       async () => {
         const existing = vlans.find(v => v.id === vlanId);
         if (existing) {
@@ -1256,41 +1315,22 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     return runProvisioningTask(
       `Apply optimization: ${insight.title}`,
-      ['CN-AP-02-CONF-A', 'CN-AS-02-FLOOR2'],
+      ['CN-AP-02-CONF-A', 'ex2300 switch'],
       async () => {
-        setInsights(prev => prev.map(i => i.id === insightId ? { ...i, status: 'applied' } : i));
-
-        if (insightId === 'insight-load-ap2') {
-          // Migration side effect: move Johns MacBook from AP-2 to AP-1 Lobby to load balance!
-          setClients(prev =>
-            prev.map(c => {
-              if (c.id === 'cli-1') {
-                return {
-                  ...c,
-                  connectedToDeviceId: 'dev-ap-1',
-                  connectedToDeviceName: 'CN-AP-01-LOBBY',
-                  signalStrength: -62
-                };
-              }
-              return c;
-            })
-          );
-          
-          setDevices(prev =>
-            prev.map(d => {
-              if (d.id === 'dev-ap-2') return { ...d, clientsCount: Math.max(0, d.clientsCount - 1), healthScore: 98 };
-              if (d.id === 'dev-ap-1') return { ...d, clientsCount: d.clientsCount + 1 };
-              return d;
-            })
-          );
-        } else if (insightId === 'insight-fw-sec') {
-          // Decreases firewall CPU load
-          setDevices(prev =>
-            prev.map(d => d.id === 'dev-fw-1' ? { ...d, cpuUsage: 9, healthScore: 99 } : d)
-          );
+        try {
+          const res = await fetch(`http://localhost:8000/api/v1/ai/insights/${insightId}/apply`, {
+            method: 'POST'
+          });
+          if (res.ok) {
+            setInsights(prev => prev.map(i => i.id === insightId ? { ...i, status: 'applied' } : i));
+            return true;
+          } else {
+            const errData = await res.json();
+            throw new Error(errData.detail || 'Failed to apply optimization.');
+          }
+        } catch (err: any) {
+          throw new Error(err.message || 'Failed to connect to backend server.');
         }
-
-        return true;
       }
     );
   };
@@ -1321,21 +1361,42 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const addStaticReservation = async (reservation: { clientName: string; ipAddress: string; macAddress: string; vlanId: number }): Promise<boolean> => {
+    const reservationId = 'lease-' + Math.random().toString(36).substring(7);
     const newLease: DhcpLease = {
-      id: 'lease-' + Math.random().toString(36).substring(7),
+      id: reservationId,
       ipAddress: reservation.ipAddress,
       macAddress: reservation.macAddress.toUpperCase(),
       clientName: reservation.clientName,
       vlanId: reservation.vlanId,
-      leaseTime: 'Static Reservation'
+      leaseTime: 'Infinite (Static reservation)'
     };
 
     return runProvisioningTask(
       `Reserve Static DHCP binding: ${reservation.clientName} (${reservation.ipAddress})`,
-      ['CN-FW-01-BORDER'],
+      ['srx300 firewall'],
       async () => {
-        setDhcpLeases(prev => [...prev, newLease]);
-        return true;
+        try {
+          const res = await fetch('http://localhost:8000/api/v1/dhcp/reservations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: reservationId,
+              ipAddress: reservation.ipAddress,
+              macAddress: reservation.macAddress.toUpperCase(),
+              clientName: reservation.clientName,
+              vlanId: reservation.vlanId
+            })
+          });
+          if (res.ok) {
+            setDhcpLeases(prev => [...prev, newLease]);
+            return true;
+          } else {
+            const errData = await res.json();
+            throw new Error(errData.detail || 'Static reservation rejected by server.');
+          }
+        } catch (err: any) {
+          throw new Error(err.message || 'Failed to connect to backend server.');
+        }
       }
     );
   };
@@ -1343,10 +1404,22 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const deleteStaticReservation = async (leaseId: string): Promise<boolean> => {
     return runProvisioningTask(
       `Delete DHCP binding reservation: ${leaseId}`,
-      ['CN-FW-01-BORDER'],
+      ['srx300 firewall'],
       async () => {
-        setDhcpLeases(prev => prev.filter(l => l.id !== leaseId));
-        return true;
+        try {
+          const res = await fetch(`http://localhost:8000/api/v1/dhcp/reservations/${leaseId}`, {
+            method: 'DELETE'
+          });
+          if (res.ok) {
+            setDhcpLeases(prev => prev.filter(l => l.id !== leaseId));
+            return true;
+          } else {
+            const errData = await res.json();
+            throw new Error(errData.detail || 'Failed to delete static reservation.');
+          }
+        } catch (err: any) {
+          throw new Error(err.message || 'Failed to connect to backend server.');
+        }
       }
     );
   };
@@ -1525,6 +1598,79 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return true;
   };
 
+  const calculatedVlans = useMemo(() => {
+    // 1. Locate the core switch (EX4100) first
+    const coreSwitch = devices.find(d => d.type === 'core_switch');
+    if (coreSwitch) {
+      const tVlans = coreSwitch.telemetry?.vlans;
+      const cVlans = coreSwitch.config?.vlans;
+      
+      const rawList = (Array.isArray(tVlans) && tVlans.length > 0) 
+        ? tVlans 
+        : (Array.isArray(cVlans) ? cVlans : tVlans);
+      
+      if (Array.isArray(rawList) && rawList.length > 0) {
+        return rawList.map((v: any) => {
+          const vlanId = v.vlan_id || v.id;
+          const name = v.name || v.vlan_name || `VLAN-${vlanId}`;
+          const members = v.members || [];
+          const memberCount = v.member_count !== undefined ? v.member_count : members.length;
+          const activeInterfaces = v.active_interfaces !== undefined ? v.active_interfaces : (members.length || '--');
+          
+          return {
+            id: Number(vlanId),
+            name: name,
+            subnet: v.subnet || '—',
+            dhcpRange: v.dhcpRange || v.dhcp_range || '—',
+            dnsServers: v.dns_servers || [],
+            activeLeasesCount: memberCount,
+            activeInterfaces: activeInterfaces,
+            description: v.description || '—'
+          };
+        });
+      }
+    }
+
+    // 2. Fallback to access switches (EX2300) if no core switch is present
+    const accessSwitch = devices.find(d => d.type === 'access_switch');
+    if (accessSwitch && accessSwitch.telemetry && Array.isArray(accessSwitch.telemetry.vlans)) {
+      return accessSwitch.telemetry.vlans.map((v: any) => {
+        const vlanId = v.vlan_id || v.id;
+        const name = v.name || v.vlan_name || `VLAN-${vlanId}`;
+        const members = v.members || [];
+        const memberCount = v.member_count !== undefined ? v.member_count : members.length;
+        const activeInterfaces = v.active_interfaces !== undefined ? v.active_interfaces : (members.length || '--');
+
+        return {
+          id: Number(vlanId),
+          name: name,
+          subnet: v.subnet || '—',
+          dhcpRange: v.dhcpRange || v.dhcp_range || '—',
+          dnsServers: v.dns_servers || [],
+          activeLeasesCount: memberCount,
+          activeInterfaces: activeInterfaces,
+          description: v.description || '—'
+        };
+      });
+    }
+
+    // 3. Fallback to database vlans if they are fetched from /api/v1/vlans
+    if (Array.isArray(vlans) && vlans.length > 0) {
+      return vlans.map((v: any) => ({
+        id: v.id,
+        name: v.name,
+        subnet: v.subnet || '—',
+        dhcpRange: v.dhcpRange || v.dhcp_range || '—',
+        dnsServers: v.dnsServers || v.dns_servers || [],
+        activeLeasesCount: v.activeLeasesCount !== undefined ? v.activeLeasesCount : 0,
+        activeInterfaces: v.activeInterfaces !== undefined ? v.activeInterfaces : '--',
+        description: v.description || '—'
+      }));
+    }
+
+    return [];
+  }, [devices, vlans]);
+
   return (
     <NetworkStoreContext.Provider value={{
       organizations,
@@ -1532,7 +1678,7 @@ export const NetworkStoreProvider: React.FC<{ children: React.ReactNode }> = ({ 
       buildings,
       devices,
       ssids,
-      vlans,
+      vlans: calculatedVlans,
       dhcpLeases,
       clients,
       alerts,

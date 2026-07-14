@@ -16,7 +16,7 @@ class MockFirewallCollector:
             "version": "JunOS 21.4R3-S3.4",
             "temperature": 38,
             "telemetry": {
-                "hostname": "CN-FW-01-BORDER",
+                "hostname": "srx300 firewall",
                 "active_sessions": random.randint(1200, 1600),
                 "packet_loss_percentage": 0.0,
                 "interfaces": [

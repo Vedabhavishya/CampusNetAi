@@ -56,6 +56,17 @@ export const OperationsDashboard: React.FC = () => {
   const activeMaintCount = maintenanceWindows.filter(w => w.status === 'active').length;
   const criticalAlertsCount = alerts.filter(a => a.severity === 'critical' && !a.resolved).length;
 
+  const securityScore = useMemo(() => {
+    const unresSecAlerts = alerts.filter(a => !a.resolved && a.category === 'security').length;
+    const critSecEvents = securityEvents.filter(e => e.severity === 'critical').length;
+    return Math.max(50, 100 - (unresSecAlerts * 15) - (critSecEvents * 10));
+  }, [alerts, securityEvents]);
+
+  const monthlySla = useMemo(() => {
+    const avgAvailability = devices.length === 0 ? 99.99 : devices.reduce((acc, d) => acc + (d.availability ?? 99.9), 0) / devices.length;
+    return `${avgAvailability.toFixed(2)}%`;
+  }, [devices]);
+
   return (
     <div className="space-y-6">
       {/* Title Header */}
@@ -82,7 +93,7 @@ export const OperationsDashboard: React.FC = () => {
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {[
           { label: 'Network Health', val: `${healthScores.campus}%`, sub: 'Campus aggregate', icon: Activity, color: 'text-emerald-500 bg-emerald-500/10' },
-          { label: 'Security Score', val: '96%', sub: 'No breaches', icon: Shield, color: 'text-blue-500 bg-blue-500/10' },
+          { label: 'Security Score', val: `${securityScore}%`, sub: 'No breaches', icon: Shield, color: 'text-blue-500 bg-blue-500/10' },
           { label: 'WiFi Health', val: `${healthScores.wifi}%`, sub: 'Coverage index', icon: Wifi, color: 'text-indigo-500 bg-indigo-500/10' },
           { label: 'Total Devices', val: devices.length, sub: `${onlineCount} Up / ${offlineCount} Down`, icon: Server, color: 'text-cyan-500 bg-cyan-500/10' },
           { label: 'Clients Connected', val: clients.length, sub: 'Active hosts', icon: Users, color: 'text-brand-500 bg-brand-500/10' },
@@ -91,7 +102,7 @@ export const OperationsDashboard: React.FC = () => {
           { label: 'Active Tasks', val: activeTasksCount, sub: 'In execution queue', icon: RefreshCcw, color: 'text-amber-500 bg-amber-500/10 animate-spin-slow' },
           { label: 'Critical Alerts', val: criticalAlertsCount, sub: 'Requires inspection', icon: AlertCircle, color: 'text-red-500 bg-red-500/10' },
           { label: 'Maintenance Mode', val: activeMaintCount, sub: 'Alerts suppressed', icon: Calendar, color: 'text-slate-500 bg-slate-500/10' },
-          { label: 'Monthly SLA', val: '99.98%', sub: 'Target: 99.9%', icon: Clock, color: 'text-teal-500 bg-teal-500/10' },
+          { label: 'Monthly SLA', val: monthlySla, sub: 'Target: 99.9%', icon: Clock, color: 'text-teal-500 bg-teal-500/10' },
           { label: 'Operator Role', val: user?.role.split(' ')[0] || 'Engineer', sub: 'Permissions bound', icon: Lock, color: 'text-fuchsia-500 bg-fuchsia-500/10' }
         ].map((c, idx) => (
           <Card key={idx} noPadding className="relative overflow-hidden p-4 flex flex-col justify-between text-left h-[100px]">

@@ -1168,7 +1168,7 @@ Uptime: ${device.uptime}`;
               <div className="flex flex-col items-center justify-center py-6 space-y-4 bg-slate-900/40 border border-slate-200/10 rounded-2xl">
                 <div className="flex items-center space-x-8">
                   <div className="p-3 bg-brand-500 text-white rounded-xl font-bold font-mono text-[10px]">
-                    CN-FW-01-BORDER
+                    srx300 firewall
                   </div>
                   <div className="border-t-2 border-dashed border-slate-400 w-12 flex items-center justify-center font-bold text-[8px] text-slate-400">
                     Trunk

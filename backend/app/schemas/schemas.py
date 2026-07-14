@@ -87,6 +87,7 @@ class ClientOut(BaseModel):
     vlanId: int
     os: str
     band: Optional[str] = None
+    ssid: Optional[str] = None
 
     class Config:
         from_attributes = True

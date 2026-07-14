@@ -14,7 +14,7 @@ class EX4100Parser(BaseParser):
         info = {
             "model": "EX4100-24T",
             "junos": "22.4R1.10",
-            "hostname": "CN-CS-01-SPINE",
+            "hostname": "ex4100 router",
             "vendor": "Juniper",
             "device_type": "Core Switch"
         }

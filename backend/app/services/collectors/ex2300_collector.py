@@ -75,7 +75,7 @@ class EX2300Collector(EX4100Collector):
         ])
         members.extend(["xe-0/0/0", "xe-0/0/1"])
 
-        hostname = "CN-AS-01-FLOOR1" if "10" in host else "CN-AS-02-FLOOR2"
+        hostname = "ex2300 switch" if "10" in host else "CN-AS-02-FLOOR2"
 
         return {
             "status": "online",
@@ -99,7 +99,7 @@ class EX2300Collector(EX4100Collector):
                     {"mac_address": "00:0b:82:33:c5:10", "vlan": "default", "interface": "ge-0/0/0", "type": "Dynamic", "age": "-"}
                 ],
                 "lldp_neighbors": [
-                    {"local_interface": "ge-0/0/0", "neighbor_hostname": "CN-CS-01-SPINE", "neighbor_interface": "ge-0/0/2", "neighbor_chassis_id": "00:15:5d:83:b2:1a"}
+                    {"local_interface": "ge-0/0/0", "neighbor_hostname": "ex4100 router", "neighbor_interface": "ge-0/0/2", "neighbor_chassis_id": "00:15:5d:83:b2:1a"}
                 ],
                 "port_statistics": {
                     "ports": {

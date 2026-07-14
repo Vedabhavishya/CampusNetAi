@@ -170,13 +170,13 @@ Ethernet-switching table: 2 entries
     def test_ex4100_parser_lldp(self):
         lldp_output = """
 Local Interface    Parent Interface    Chassis Id          Port info          System Name
-ge-0/0/0.0         -                   00:0b:82:11:a3:f1   ge-0/0/0.0         CN-FW-01-BORDER
-ge-0/0/1.0         -                   00:0b:82:33:c5:11   ge-0/0/4.0         CN-AS-01-FLOOR1
+ge-0/0/0.0         -                   00:0b:82:11:a3:f1   ge-0/0/0.0         srx300 firewall
+ge-0/0/1.0         -                   00:0b:82:33:c5:11   ge-0/0/4.0         ex2300 switch
 """
         parsed = self.parser.parse_lldp(lldp_output)
         self.assertEqual(len(parsed), 2)
         self.assertEqual(parsed[0]["local_interface"], "ge-0/0/0.0")
-        self.assertEqual(parsed[0]["neighbor_hostname"], "CN-FW-01-BORDER")
+        self.assertEqual(parsed[0]["neighbor_hostname"], "srx300 firewall")
         self.assertEqual(parsed[0]["neighbor_interface"], "ge-0/0/0.0")
         self.assertEqual(parsed[0]["neighbor_chassis_id"], "00:0b:82:11:a3:f1")
 
@@ -211,7 +211,7 @@ Physical interface: ge-0/0/0, Enabled, Physical link is Up
         self.assertEqual(self.parser.parse_version(""), {
             "model": "EX4100-24T",
             "junos": "22.4R1.10",
-            "hostname": "CN-CS-01-SPINE",
+            "hostname": "ex4100 router",
             "vendor": "Juniper",
             "device_type": "Core Switch"
         })
@@ -226,7 +226,7 @@ Physical interface: ge-0/0/0, Enabled, Physical link is Up
         self.assertEqual(self.parser.parse_mac_table(""), [])
         self.assertEqual(self.parser.parse_lldp(""), [])
         self.assertEqual(self.parser.parse_interface_stats("")["ports"], {})
-
+ 
     @patch('app.services.collectors.ex4100_collector.SSHManager')
     def test_ex4100_collector_mock_fallback(self, mock_ssh_manager_class):
         mock_ssh = mock_ssh_manager_class.return_value
@@ -238,7 +238,7 @@ Physical interface: ge-0/0/0, Enabled, Physical link is Up
         
         self.assertEqual(status["status"], "online")
         self.assertEqual(status["model"], "Juniper EX4400-24T (Mock)")
-        self.assertEqual(status["telemetry"]["hostname"], "CN-CS-01-SPINE")
+        self.assertEqual(status["telemetry"]["hostname"], "ex4100 router")
         self.assertEqual(len(status["telemetry"]["vlans"]), 1)
 
     @patch('app.services.collectors.ex4100_collector.SSHManager')

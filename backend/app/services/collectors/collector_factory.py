@@ -2,6 +2,7 @@ from .base_collector import BaseDeviceCollector
 from .srx_collector import SRXCollector
 from .ex4100_collector import EX4100Collector
 from .ex2300_collector import EX2300Collector
+from .mist_collector import MistCollector
 from .mock.mock_switch import MockCoreSwitchCollector, MockAccessSwitchCollector
 from .mock.mock_ap import MockApCollector
 
@@ -14,7 +15,7 @@ class CollectorRegistry:
             "firewall": SRXCollector(),
             "core_switch": EX4100Collector(),
             "access_switch": EX2300Collector(),
-            "access_point": MockApCollector()
+            "access_point": MistCollector()
         }
 
     def get_collector(self, device_type: str, model: str = None) -> BaseDeviceCollector:

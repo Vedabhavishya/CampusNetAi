@@ -46,6 +46,7 @@ class DbClient(Base):
     vlan_id = Column(Integer, nullable=False)
     os = Column(String, nullable=False)
     band = Column(String, nullable=True)
+    ssid = Column(String, nullable=True)
 
 class DbVlan(Base):
     __tablename__ = "vlans"

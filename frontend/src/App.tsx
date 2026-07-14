@@ -60,7 +60,8 @@ export const App: React.FC = () => {
                   <Route path="devices/firewall" element={<FirewallManager />} />
                   <Route path="devices/core-switch" element={<CoreSwitchManager />} />
                   <Route path="devices/access-switch" element={<AccessSwitchManager />} />
-                  <Route path="devices/access-point" element={<AccessPointManager />} />
+                  <Route path="devices/wireless-center" element={<AccessPointManager />} />
+                  <Route path="devices/access-point" element={<Navigate to="/devices/wireless-center" replace />} />
                   <Route path="wifi" element={<WiFiManager />} />
                   <Route path="clients" element={<ClientManager />} />
                   <Route path="vlans" element={<VlanManager />} />

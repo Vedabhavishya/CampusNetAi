@@ -27,10 +27,16 @@ export const Button: React.FC<ButtonProps> = ({
     outline: 'bg-transparent border border-slate-200 dark:border-slate-800 hover:bg-slate-500/5 text-slate-700 dark:text-slate-300 focus:ring-brand-500',
   };
 
+  const hasCustomPadding = className.split(' ').some(c => {
+    const parts = c.split(':');
+    const target = parts[parts.length - 1];
+    return target.startsWith('p-') || target.startsWith('px-') || target.startsWith('py-');
+  });
+
   const sizes = {
-    sm: 'px-3 py-1.5 text-xs',
-    md: 'px-4 py-2 text-sm',
-    lg: 'px-5 py-2.5 text-base',
+    sm: hasCustomPadding ? 'text-xs' : 'px-3 py-1.5 text-xs',
+    md: hasCustomPadding ? 'text-sm' : 'px-4 py-2 text-sm',
+    lg: hasCustomPadding ? 'text-base' : 'px-5 py-2.5 text-base',
   };
 
   return (

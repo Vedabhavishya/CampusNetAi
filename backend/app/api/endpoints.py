@@ -180,9 +180,18 @@ def get_devices(db: Session = Depends(get_db), current_user: DbUser = Depends(ge
                     ]
                 
                 # Update clients count if radios telemetry exists
-                if "radios" in telemetry:
+                if "radios" in telemetry and d.type != "access_point":
                     radios = telemetry["radios"]
                     clients_count = sum(r.get("active_clients", 0) for r in radios.values())
+
+            # Inject site-wide wireless stats dynamically during serialization
+            if d.type == "access_point" and telemetry:
+                site_data = telemetry_cache.get("wireless_site_data")
+                if site_data:
+                    telemetry = dict(telemetry)
+                    wireless = dict(telemetry.get("wireless", {}))
+                    wireless["site"] = site_data
+                    telemetry["wireless"] = wireless
 
             # Check if connected is False (unreachable offline state)
             if cached.get("connected") is False:
@@ -210,7 +219,7 @@ def get_devices(db: Session = Depends(get_db), current_user: DbUser = Depends(ge
                     collector=cached.get("collector"),
                     inventory=cached.get("inventory"),
                     health=cached.get("health"),
-                    telemetry=cached.get("telemetry"),
+                    telemetry=telemetry,
                     performance=cached.get("performance") or (cached.get("telemetry", {}).get("performance") if isinstance(cached.get("telemetry"), dict) else None),
                     raw=cached.get("raw")
                 )
@@ -407,7 +416,8 @@ def get_clients(db: Session = Depends(get_db), current_user: DbUser = Depends(ge
             connectedToDeviceName=c.connected_to_device_name,
             vlanId=c.vlan_id,
             os=c.os,
-            band=c.band
+            band=c.band,
+            ssid=c.ssid
         )
         for c in clients
     ]
@@ -544,6 +554,16 @@ def add_static_reservation(reservation: DhcpReservationCreate, db: Session = Dep
         leaseTime=new_res.lease_time,
         vlanId=new_res.vlan_id
     )
+
+
+@router.delete("/dhcp/reservations/{lease_id}")
+def delete_static_reservation(lease_id: str, db: Session = Depends(get_db), current_user: DbUser = Depends(allow_write)):
+    res = db.query(DbDhcpLease).filter(DbDhcpLease.id == lease_id).first()
+    if not res:
+        raise HTTPException(status_code=404, detail="DHCP reservation not found")
+    db.delete(res)
+    db.commit()
+    return {"success": True, "detail": "DHCP reservation deleted."}
 
 
 # --- ALERTS ENDPOINTS ---

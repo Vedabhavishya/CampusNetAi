@@ -28,7 +28,7 @@ app.add_middleware(
 )
 
 import asyncio
-from .services.collectors import collector_registry, start_scheduler
+from .services.collectors import collector_registry, start_scheduler, start_mist_scheduler
 
 # Background polling daemon is now handled by the services.collectors scheduler module
 
@@ -44,8 +44,16 @@ def startup_event():
     finally:
         db.close()
     
-    # Start the local network polling task scheduler
-    asyncio.create_task(start_scheduler())
+    # Start the local network polling task scheduler in a background daemon thread
+    import threading
+    def run_scheduler_in_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.create_task(start_scheduler())
+        loop.create_task(start_mist_scheduler())
+        loop.run_forever()
+        
+    threading.Thread(target=run_scheduler_in_thread, daemon=True).start()
 
 # Include API Router
 app.include_router(api_router, prefix=settings.API_STR)

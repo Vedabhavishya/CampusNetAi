@@ -72,7 +72,7 @@ class EX4100Collector(BaseCollector):
             "version": mock_data["version"],
             "temperature": 42,
             "telemetry": {
-                "hostname": "CN-CS-01-SPINE",
+                "hostname": "ex4100 router",
                 "interfaces": [
                     {"interface": "ge-0/0/0", "admin": "up", "link": "up", "ip": "N/A", "protocol": "eth-switch"},
                     {"interface": "ge-0/0/1", "admin": "up", "link": "up", "ip": "N/A", "protocol": "eth-switch"}
@@ -126,7 +126,7 @@ class EX4100Collector(BaseCollector):
             },
             "inventory": {
                 "device_id": self.device_id,
-                "hostname": "CN-CS-01-SPINE",
+                "hostname": "ex4100 router",
                 "vendor": "Juniper",
                 "family": "EX",
                 "model": mock_data["model"],

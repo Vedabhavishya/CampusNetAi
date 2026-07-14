@@ -56,7 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
         { label: 'Firewalls', path: '/devices/firewall', icon: Shield },
         { label: 'Core Switches', path: '/devices/core-switch', icon: Layers },
         { label: 'Access Switches', path: '/devices/access-switch', icon: Server },
-        { label: 'Access Points', path: '/devices/access-point', icon: Wifi },
+        { label: 'Wireless Center', path: '/devices/wireless-center', icon: Wifi },
       ]
     },
     { label: 'Device Discovery', path: '/discovery', icon: Search },

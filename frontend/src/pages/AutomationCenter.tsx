@@ -23,9 +23,9 @@ interface ZtpTemplate {
 }
 
 const initialBackups: ConfigBackup[] = [
-  { id: 'cfg-1', filename: 'CN-FW-01-BORDER_backup_2026-07-06.cfg', timestamp: '2026-07-06 22:00:00', size: '145 KB', deviceType: 'Firewall' },
-  { id: 'cfg-2', filename: 'CN-CS-01-SPINE_backup_2026-07-06.cfg', timestamp: '2026-07-06 22:05:00', size: '98 KB', deviceType: 'Core Switch' },
-  { id: 'cfg-3', filename: 'CN-AS-01-FLOOR1_backup_2026-07-06.cfg', timestamp: '2026-07-06 22:10:00', size: '64 KB', deviceType: 'Access Switch' },
+  { id: 'cfg-1', filename: 'srx300 firewall_backup_2026-07-06.cfg', timestamp: '2026-07-06 22:00:00', size: '145 KB', deviceType: 'Firewall' },
+  { id: 'cfg-2', filename: 'ex4100 router_backup_2026-07-06.cfg', timestamp: '2026-07-06 22:05:00', size: '98 KB', deviceType: 'Core Switch' },
+  { id: 'cfg-3', filename: 'ex2300 switch_backup_2026-07-06.cfg', timestamp: '2026-07-06 22:10:00', size: '64 KB', deviceType: 'Access Switch' },
 ];
 
 const initialZtp: ZtpTemplate[] = [

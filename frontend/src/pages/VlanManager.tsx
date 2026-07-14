@@ -5,28 +5,29 @@ import { Table } from '../components/Table';
 import { Modal } from '../components/Modal';
 import { useNetworkStore } from '../contexts/NetworkStoreContext';
 import { useAuth } from '../contexts/AuthContext';
-import { Vlan } from '../types';
-import { Split, Plus, Trash2, Edit3, ShieldAlert } from 'lucide-react';
+import { useVlanInventory, CalculatedVlan } from '../utils/vlanUtils';
+import { Split, Plus, Trash2, Edit3 } from 'lucide-react';
 
 export const VlanManager: React.FC = () => {
   const { user } = useAuth();
   const { 
-    vlans, 
     addVlan, 
     deleteVlan, 
     renameVlan 
   } = useNetworkStore();
 
+  const vlans = useVlanInventory();
+
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
-  const [selectedVlan, setSelectedVlan] = useState<Vlan | null>(null);
+  const [selectedVlan, setSelectedVlan] = useState<CalculatedVlan | null>(null);
 
-  // Form states
+  // Form states (no static fallback subnets)
   const [vlanId, setVlanId] = useState('');
   const [vlanName, setVlanName] = useState('');
   const [vlanSubnet, setVlanSubnet] = useState('');
   const [vlanRange, setVlanRange] = useState('');
-  const [vlanDns, setVlanDns] = useState('1.1.1.1, 8.8.8.8');
+  const [vlanDns, setVlanDns] = useState('');
   const [vlanRenameText, setVlanRenameText] = useState('');
 
   const isReadOnly = user?.role === 'Network Engineer';
@@ -39,29 +40,32 @@ export const VlanManager: React.FC = () => {
       await addVlan({
         id: Number(vlanId),
         name: vlanName,
-        subnet: vlanSubnet,
-        dhcpRange: vlanRange,
-        dnsServers: vlanDns.split(',').map((d) => d.trim()),
+        subnet: vlanSubnet || '—',
+        dhcpRange: vlanRange || '—',
+        dnsServers: vlanDns ? vlanDns.split(',').map((d) => d.trim()) : [],
       });
       setIsAddOpen(false);
       setVlanId('');
       setVlanName('');
       setVlanSubnet('');
       setVlanRange('');
+      setVlanDns('');
     } catch (err: any) {
       alert(err.message || 'Failed to create VLAN.');
     }
   };
 
   const handleDelete = async (id: number) => {
-    try {
-      await deleteVlan(id);
-    } catch (err: any) {
-      alert(err.message || 'VLAN deletion rejected.');
+    if (confirm(`Are you sure you want to delete VLAN ${id}?`)) {
+      try {
+        await deleteVlan(id);
+      } catch (err: any) {
+        alert(err.message || 'VLAN deletion rejected.');
+      }
     }
   };
 
-  const triggerRename = (vlan: Vlan) => {
+  const triggerRename = (vlan: CalculatedVlan) => {
     setSelectedVlan(vlan);
     setVlanRenameText(vlan.name);
     setIsRenameOpen(true);
@@ -78,46 +82,57 @@ export const VlanManager: React.FC = () => {
   const columns = [
     {
       header: 'VLAN ID',
-      accessor: (row: Vlan) => (
+      accessor: (row: CalculatedVlan) => (
         <span className="font-mono font-bold text-cyan-400">VLAN {row.id}</span>
       ),
       sortable: true
     },
     {
       header: 'Profile Name',
-      accessor: (row: Vlan) => (
+      accessor: (row: CalculatedVlan) => (
         <span className="font-bold text-slate-800 dark:text-slate-200">{row.name}</span>
       ),
       sortable: true
     },
     {
-      header: 'IPv4 Network Subnet',
-      accessor: (row: Vlan) => <span className="font-mono text-xs">{row.subnet}</span>,
-      sortable: true
-    },
-    {
-      header: 'DHCP Pool Range',
-      accessor: (row: Vlan) => <span className="font-mono text-xs">{row.dhcpRange}</span>
-    },
-    {
-      header: 'DNS Servers',
-      accessor: (row: Vlan) => <span className="text-xs font-mono text-slate-500">{row.dnsServers.join(', ')}</span>
-    },
-    {
-      header: 'Active Leases count',
-      accessor: (row: Vlan) => (
-        <span className="font-mono font-semibold">{row.activeLeasesCount} leases</span>
+      header: 'Member Count',
+      accessor: (row: CalculatedVlan) => (
+        <span className="font-mono font-semibold">{row.memberCount}</span>
       ),
       sortable: true
     },
     {
+      header: 'Active Interfaces',
+      accessor: (row: CalculatedVlan) => (
+        <span className="font-mono text-xs">{row.activeInterfaces}</span>
+      ),
+      sortable: true
+    },
+    {
+      header: 'IPv4 Network Subnet',
+      accessor: (row: CalculatedVlan) => <span className="font-mono text-xs">{row.subnet}</span>,
+      sortable: true
+    },
+    {
+      header: 'DHCP Pool Range',
+      accessor: (row: CalculatedVlan) => <span className="font-mono text-xs">{row.dhcpRange}</span>
+    },
+    {
+      header: 'DNS Servers',
+      accessor: (row: CalculatedVlan) => (
+        <span className="text-xs font-mono text-slate-500">
+          {row.dnsServers && row.dnsServers.length > 0 ? row.dnsServers.join(', ') : '—'}
+        </span>
+      )
+    },
+    {
       header: 'Actions',
-      accessor: (row: Vlan) => (
+      accessor: (row: CalculatedVlan) => (
         <div className="flex items-center justify-end gap-1.5">
           <Button
             variant="outline"
             onClick={() => triggerRename(row)}
-            className="p-1 h-8 w-8 flex items-center justify-center"
+            className="p-1 h-8 w-8 flex items-center justify-center cursor-pointer"
             title="Rename VLAN Profile"
           >
             <Edit3 className="h-4 w-4" />
@@ -126,7 +141,7 @@ export const VlanManager: React.FC = () => {
             <Button
               variant="ghost"
               onClick={() => handleDelete(row.id)}
-              className="p-1 h-8 w-8 flex items-center justify-center text-rose-500 hover:text-rose-700"
+              className="p-1 h-8 w-8 flex items-center justify-center text-rose-500 hover:text-rose-700 cursor-pointer"
               title="Delete VLAN"
             >
               <Trash2 className="h-4 w-4" />
@@ -151,7 +166,7 @@ export const VlanManager: React.FC = () => {
               VLAN Profiles Management
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Configure organizational virtual subnets, 802.1Q tags, and address pool mappings.
+              Configure virtual subnets dynamically synchronized from EX4100 switch backplane.
             </p>
           </div>
         </div>
@@ -172,7 +187,7 @@ export const VlanManager: React.FC = () => {
           columns={columns}
           data={vlans}
           searchKeys={['name', 'subnet']}
-          searchPlaceholder="Search VLAN name or subnet address..."
+          searchPlaceholder="Search VLAN name or subnet..."
           defaultSortField="id"
         />
       </Card>
@@ -219,8 +234,7 @@ export const VlanManager: React.FC = () => {
               <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">IPv4 Subnet</label>
               <input
                 type="text"
-                required
-                placeholder="e.g. 10.10.50.0/24"
+                placeholder="e.g. 10.10.50.0/24 (Optional)"
                 value={vlanSubnet}
                 onChange={(e) => setVlanSubnet(e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
@@ -230,8 +244,7 @@ export const VlanManager: React.FC = () => {
               <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">DHCP Lease Pool</label>
               <input
                 type="text"
-                required
-                placeholder="e.g. 10.10.50.10 - 10.10.50.250"
+                placeholder="e.g. 10.10.50.10 - 10.10.50.250 (Optional)"
                 value={vlanRange}
                 onChange={(e) => setVlanRange(e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
@@ -242,7 +255,7 @@ export const VlanManager: React.FC = () => {
             <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">DNS Servers</label>
             <input
               type="text"
-              required
+              placeholder="e.g. 1.1.1.1, 8.8.8.8 (Optional)"
               value={vlanDns}
               onChange={(e) => setVlanDns(e.target.value)}
               className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
@@ -276,4 +289,5 @@ export const VlanManager: React.FC = () => {
     </div>
   );
 };
+
 export default VlanManager;

@@ -21,7 +21,7 @@ const API_BASE_URL = 'http://localhost:8000/api/v1';
 const initialDevices: NetworkDevice[] = [
   {
     id: 'dev-fw-1',
-    name: 'CN-FW-01-BORDER',
+    name: 'srx300 firewall',
     type: 'firewall',
     ipAddress: '192.168.1.1',
     macAddress: '00:0B:82:11:A3:F1',
@@ -49,7 +49,7 @@ const initialDevices: NetworkDevice[] = [
   },
   {
     id: 'dev-cs-1',
-    name: 'CN-CS-01-SPINE',
+    name: 'ex4100 router',
     type: 'core_switch',
     ipAddress: '10.10.10.2',
     macAddress: '00:0B:82:22:B4:02',
@@ -72,7 +72,7 @@ const initialDevices: NetworkDevice[] = [
   },
   {
     id: 'dev-as-1',
-    name: 'CN-AS-01-FLOOR1',
+    name: 'ex2300 switch',
     type: 'access_switch',
     ipAddress: '10.10.10.10',
     macAddress: '00:0B:82:33:C5:10',
@@ -220,7 +220,7 @@ const initialClients: NetworkClient[] = [
     rxRate: 980.0,
     txRate: 750.0,
     connectedToDeviceId: 'dev-as-1',
-    connectedToDeviceName: 'CN-AS-01-FLOOR1',
+    connectedToDeviceName: 'ex2300 switch',
     vlanId: 10,
     os: 'Windows 11 Enterprise'
   },
@@ -234,7 +234,7 @@ const initialClients: NetworkClient[] = [
     rxRate: 0.2,
     txRate: 0.1,
     connectedToDeviceId: 'dev-as-1',
-    connectedToDeviceName: 'CN-AS-01-FLOOR1',
+    connectedToDeviceName: 'ex2300 switch',
     vlanId: 40,
     os: 'Embedded Linux'
   },
@@ -286,40 +286,8 @@ const initialClients: NetworkClient[] = [
   }
 ];
 
-const initialVlans: Vlan[] = [
-  {
-    id: 10,
-    name: 'VLAN_MGMT_NET',
-    subnet: '10.10.10.0/24',
-    dhcpRange: '10.10.10.50 - 10.10.10.250',
-    dnsServers: ['1.1.1.1', '8.8.8.8'],
-    activeLeasesCount: 5
-  },
-  {
-    id: 20,
-    name: 'VLAN_CORP_NET',
-    subnet: '10.10.20.0/24',
-    dhcpRange: '10.10.20.20 - 10.10.20.254',
-    dnsServers: ['10.10.10.10', '1.1.1.1'],
-    activeLeasesCount: 15
-  },
-  {
-    id: 30,
-    name: 'VLAN_GUEST_NET',
-    subnet: '10.10.30.0/24',
-    dhcpRange: '10.10.30.10 - 10.10.30.254',
-    dnsServers: ['8.8.8.8', '8.8.4.4'],
-    activeLeasesCount: 22
-  },
-  {
-    id: 40,
-    name: 'VLAN_IOT_NET',
-    subnet: '10.10.40.0/24',
-    dhcpRange: '10.10.40.100 - 10.10.40.200',
-    dnsServers: ['1.1.1.1'],
-    activeLeasesCount: 8
-  }
-];
+const initialVlans: Vlan[] = [];
+
 
 const initialDhcpLeases: DhcpLease[] = [
   { id: 'lease-1', ipAddress: '10.10.10.122', macAddress: '00:15:5D:83:B2:1A', clientName: 'Finance-Desktop-01', leaseTime: '12 hours remaining', vlanId: 10 },
@@ -408,7 +376,7 @@ const initialAlerts: NetworkAlert[] = [
     message: 'Intrusion Detection: Firewall blocked port scan originating from external IP 198.51.100.42.',
     timestamp: '2026-07-07T09:45:00Z',
     deviceId: 'dev-fw-1',
-    deviceName: 'CN-FW-01-BORDER',
+    deviceName: 'srx300 firewall',
     resolved: false,
     category: 'security'
   }
@@ -865,7 +833,169 @@ class CampusNetApi {
         const clients = this.getClients();
         const alerts = this.getAlerts();
 
-        if (query.includes('offline') || query.includes('disconnected')) {
+        // Helper: Find switch connection for APs
+        const getApUplink = (apName: string, apMac: string) => {
+          for (const d of devices) {
+            if (d.type === 'access_switch' || d.type === 'core_switch') {
+              const neighbors = d.telemetry?.lldp_neighbors || [];
+              const match = neighbors.find((n: any) => 
+                (n.neighbor_hostname && n.neighbor_hostname.toLowerCase().includes(apName.toLowerCase())) ||
+                (n.neighbor_chassis_id && n.neighbor_chassis_id.toLowerCase().replace(/[:.-]/g, '') === apMac.toLowerCase().replace(/[:.-]/g, ''))
+              );
+              if (match) {
+                return { switchName: d.name, switchPort: match.local_interface, switchDevice: d };
+              }
+            }
+          }
+          return null;
+        };
+
+        if (query.includes('highest cpu') || query.includes('switch has the highest cpu')) {
+          const switches = devices.filter((d) => d.type.includes('switch'));
+          if (switches.length === 0) {
+            resolve({ text: "No switches discovered in the network database." });
+          } else {
+            const sorted = [...switches].sort((a, b) => (b.cpuUsage || 0) - (a.cpuUsage || 0));
+            resolve({
+              text: `Switch **${sorted[0].name}** (${sorted[0].model}) has the highest CPU utilization at **${sorted[0].cpuUsage}%**.`,
+              data: sorted.map(s => ({ name: s.name, model: s.model, cpuUsage: s.cpuUsage }))
+            });
+          }
+        } else if (query.includes('most bandwidth') || query.includes('ap is using the most bandwidth')) {
+          const aps = devices.filter((d) => d.type === 'access_point');
+          const apBandwidths = aps.map(ap => {
+            const conn = getApUplink(ap.name, ap.macAddress);
+            let bw = 0.01;
+            let port = 'N/A';
+            let sw = 'N/A';
+            if (conn) {
+              sw = conn.switchName;
+              port = conn.switchPort;
+              const stats = conn.switchDevice.telemetry?.port_statistics?.ports?.[conn.switchPort];
+              if (stats) {
+                const rx = stats.rx_bps ? stats.rx_bps / 1000000 : 0;
+                const tx = stats.tx_bps ? stats.tx_bps / 1000000 : 0;
+                bw = rx + tx;
+              }
+            }
+            return { ap, bandwidth: bw, port, switch: sw };
+          });
+          apBandwidths.sort((a, b) => b.bandwidth - a.bandwidth);
+          const top = apBandwidths[0];
+          resolve({
+            text: `Access Point **${top.ap.name}** is utilizing the most bandwidth at **${top.bandwidth.toFixed(2)} Mbps** aggregate rate, connected on switch **${top.switch}** port **${top.port}**.`,
+            data: apBandwidths.map(item => ({ name: item.ap.name, bandwidthMbps: parseFloat(item.bandwidth.toFixed(2)), port: item.port, switch: item.switch }))
+          });
+        } else if (query.includes('why is') && (query.includes('offline') || query.includes('down'))) {
+          let targetAp = devices.find(d => d.type === 'access_point' && (query.includes(d.name.toLowerCase()) || query.includes(d.name.toLowerCase().replace('cn-ap-', '').replace('-', ' '))));
+          if (!targetAp) {
+            targetAp = devices.find(d => d.type === 'access_point' && d.status === 'offline');
+          }
+          if (!targetAp) {
+            resolve({ text: "All Access Points are online and reporting normal heartbeats." });
+          } else {
+            const conn = getApUplink(targetAp.name, targetAp.macAddress);
+            if (conn) {
+              const portConfig = conn.switchDevice.config?.interfaces?.[conn.switchPort];
+              if (portConfig && portConfig.link === 'down') {
+                resolve({
+                  text: `**${targetAp.name}** is unreachable because switch port **${conn.switchPort}** on **${conn.switchName}** is **DOWN**. This prevents heartbeats from completing.`,
+                  data: { device: targetAp.name, switch: conn.switchName, port: conn.switchPort, link: 'down' }
+                });
+                return;
+              }
+            }
+            resolve({
+              text: `**${targetAp.name}** is offline. The connected switch interface status is healthy, suggesting a potential local hardware power cycle failure or loose cable.`,
+              data: { device: targetAp.name }
+            });
+          }
+        } else if (query.includes('crc errors') || query.includes('ports with crc')) {
+          const switches = devices.filter((d) => d.type.includes('switch'));
+          const crcPorts: any[] = [];
+          switches.forEach(sw => {
+            const portStats = sw.telemetry?.port_statistics?.ports || {};
+            Object.entries(portStats).forEach(([port, stats]: [string, any]) => {
+              if (stats.crc_errors > 0) {
+                crcPorts.push({ switch: sw.name, port, crc_errors: stats.crc_errors });
+              }
+            });
+          });
+          if (crcPorts.length === 0) {
+            resolve({ text: "Campus switches backplane audit: **Zero CRC errors** detected across all interfaces. Cabling is stable." });
+          } else {
+            resolve({
+              text: `Audit found ${crcPorts.length} switch port(s) exhibiting physical layer CRC alignment errors. Detail listing:`,
+              data: crcPorts
+            });
+          }
+        } else if (query.includes('most poe') || query.includes('consumes the most poe')) {
+          const aps = devices.filter((d) => d.type === 'access_point');
+          const apPoe = aps.map(ap => {
+            const conn = getApUplink(ap.name, ap.macAddress);
+            let watts = 0.0;
+            let port = 'N/A';
+            let sw = 'N/A';
+            if (conn) {
+              sw = conn.switchName;
+              port = conn.switchPort;
+              const portConfig = conn.switchDevice.config?.interfaces?.[conn.switchPort];
+              if (portConfig && portConfig.poeWatts) {
+                watts = parseFloat(portConfig.poeWatts);
+              } else if (portConfig && portConfig.poe) {
+                watts = 15.4;
+              }
+            }
+            return { ap, watts, port, switch: sw };
+          });
+          apPoe.sort((a, b) => b.watts - a.watts);
+          const top = apPoe[0];
+          resolve({
+            text: `Access Point **${top.ap.name}** consumes the most PoE power at **${top.watts.toFixed(1)} W**, supplied by switch **${top.switch}** port **${top.port}**.`,
+            data: apPoe.map(item => ({ name: item.ap.name, poeWatts: item.watts, port: item.port, switch: item.switch }))
+          });
+        } else if (query.includes('flapped') || query.includes('flap')) {
+          const switches = devices.filter((d) => d.type.includes('switch'));
+          const flappedPorts: any[] = [];
+          switches.forEach(sw => {
+            const portStats = sw.telemetry?.port_statistics?.ports || {};
+            Object.entries(portStats).forEach(([port, stats]: [string, any]) => {
+              if (stats.last_flap && stats.last_flap !== 'Never' && !stats.last_flap.includes('days')) {
+                flapped_ports.push({ switch: sw.name, port, last_flap: stats.last_flap });
+              }
+            });
+          });
+          if (flappedPorts.length === 0) {
+            resolve({ text: "Switch carrier backplanes are stable. **Zero interface flapping events** logged in the last 24 hours." });
+          } else {
+            resolve({
+              text: `Discovered ${flappedPorts.length} interface flapping event(s) logged today:`,
+              data: flappedPorts
+            });
+          }
+        } else if (query.includes('connected to') || query.includes('devices on')) {
+          const match = query.match(/([a-z]+-\d+\/\d+\/\d+)/);
+          const portName = match ? match[1] : "ge-0/0/7";
+          const connected: any[] = [];
+          devices.forEach(sw => {
+            if (sw.type === 'access_switch' || sw.type === 'core_switch') {
+              const neighbors = sw.telemetry?.lldp_neighbors || [];
+              neighbors.forEach((n: any) => {
+                if (n.local_interface === portName) {
+                  connected.push({ type: "switch_neighbor", name: n.neighbor_hostname, chassis_id: n.neighbor_chassis_id, switch: sw.name });
+                }
+              });
+            }
+          });
+          if (connected.length === 0) {
+            resolve({ text: `Interface **{portName}** reports no active LLDP neighbors connected.` });
+          } else {
+            resolve({
+              text: `Found the following neighbor device connected to interface **${portName}**:`,
+              data: connected
+            });
+          }
+        } else if (query.includes('offline') || query.includes('disconnected') || query.includes('down')) {
           const offlineDevices = devices.filter((d) => d.status === 'offline');
           if (offlineDevices.length === 0) {
             resolve({ text: "Currently, all network devices are online and reporting normal heartbeats." });
@@ -879,7 +1009,7 @@ class CampusNetApi {
           if (query.includes('macbook') || query.includes('john')) {
             const client = clients.find((c) => c.name.toLowerCase().includes('john'));
             resolve({
-              text: `Here is the profile for client John's MacBook. Currently connected to **CN-AP-02-CONF-A** on the 5GHz band. Signal strength is strong (-58 dBm). Wireless throughput is excellent at 425 Mbps.`,
+              text: `Here is the profile for client John's MacBook. Connected to AP **${client?.connectedToDeviceName || 'CN-AP-02-CONF-A'}** on the ${client?.band || '5GHz'} band. Signal strength is strong (${client?.signalStrength || -58} dBm).`,
               data: client
             });
           } else {
@@ -888,12 +1018,6 @@ class CampusNetApi {
               data: clients
             });
           }
-        } else if (query.includes('switch') || query.includes('poe')) {
-          const switches = devices.filter((d) => d.type.includes('switch'));
-          resolve({
-            text: `Currently managing 1 Core Switch and 2 Access Switches. "CN-AS-02-FLOOR2" is exhibiting moderate CPU load warnings. Total PoE budget utilized is 120W / 370W across the floors.`,
-            data: switches
-          });
         } else if (query.includes('alert') || query.includes('issue') || query.includes('error')) {
           const activeAlerts = alerts.filter(a => !a.resolved);
           resolve({
@@ -906,13 +1030,16 @@ class CampusNetApi {
           });
         } else {
           resolve({
-            text: `I am the CampusNet AI assistant. I can help you analyze telemetry, search client locations, find offline devices, explain security alerts, and automate network radio planning. 
+            text: `I am the CampusNet AI assistant. I query live CPU, memory, switch PoE draw, flapped interfaces, CRC errors, and connection details. 
 
 Try asking:
-- "Are there any offline devices?"
-- "Show me client John's MacBook location"
-- "List all switch alerts"
-- "Optimize radio configuration"`
+- "Which AP is using the most bandwidth?"
+- "Why is Indoor-2 offline?"
+- "Show ports with CRC errors."
+- "Which switch has the highest CPU?"
+- "Which AP consumes the most PoE?"
+- "Show interfaces that flapped today."
+- "List devices connected to ge-0/0/7."`
           });
         }
       }, 800);

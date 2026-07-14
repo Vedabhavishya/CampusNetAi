@@ -58,6 +58,60 @@ export const Reports: React.FC = () => {
           setIsGenerating(false);
           setShowSuccessToast(true);
           setTimeout(() => setShowSuccessToast(false), 4000);
+          
+          // Trigger browser file download
+          try {
+            let fileContent = '';
+            let mimeType = 'text/plain';
+            const ext = format.toLowerCase();
+            const filename = `${reportPreviewContent.title.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`;
+
+            if (format === 'CSV') {
+              mimeType = 'text/csv';
+              fileContent = [
+                ["Report Title", reportPreviewContent.title],
+                ["Date Generated", reportPreviewContent.date],
+                ["Author", reportPreviewContent.author],
+                [],
+                ["Section", "Content"]
+              ].concat(
+                reportPreviewContent.sections.map(s => [s.title, s.content])
+              ).map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+            } else if (format === 'XLSX') {
+              mimeType = 'application/vnd.ms-excel';
+              fileContent = [
+                ["Report Title", reportPreviewContent.title],
+                ["Date Generated", reportPreviewContent.date],
+                ["Author", reportPreviewContent.author],
+                [],
+                ["Section", "Content"]
+              ].concat(
+                reportPreviewContent.sections.map(s => [s.title, s.content])
+              ).map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join("\t")).join("\r\n");
+            } else {
+              // PDF
+              mimeType = 'text/plain';
+              fileContent = `REPORT: ${reportPreviewContent.title}\n` +
+                            `DATE: ${reportPreviewContent.date}\n` +
+                            `AUTHOR: ${reportPreviewContent.author.toUpperCase()}\n` +
+                            `SCOPE: HQ-MAIN-CAMPUS\n\n` +
+                            `========================================================================\n\n` +
+                            reportPreviewContent.sections.map(s => `## ${s.title.toUpperCase()}\n${s.content}\n`).join("\n") +
+                            `\n========================================================================\n` +
+                            `CLASSIFICATION: CONFIDENTIAL / INTERNAL\n`;
+            }
+
+            const blob = new Blob([fileContent], { type: `${mimeType};charset=utf-8;` });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.setAttribute("download", `${filename}.${ext}`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          } catch (err) {
+            console.error("Failed to generate download file:", err);
+          }
+
           return 100;
         }
         return prev + 20;

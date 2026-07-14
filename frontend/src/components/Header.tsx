@@ -134,7 +134,7 @@ export const Header: React.FC<HeaderProps> = ({ sidebarOpen, setSidebarOpen }) =
   }, [searchQuery]);
 
   return (
-    <header className="h-16 border-b border-slate-200/50 dark:border-slate-800/50 bg-white/70 dark:bg-slate-950/70 backdrop-blur-md fixed top-0 right-0 z-30 left-0 transition-all duration-300 md:pl-0 flex items-center justify-between px-6">
+    <header className={`h-16 border-b border-slate-200/50 dark:border-slate-800/50 bg-white/70 dark:bg-slate-950/70 backdrop-blur-md fixed top-0 right-0 z-30 transition-all duration-300 md:pl-0 flex items-center justify-between px-6 ${sidebarOpen ? 'left-64' : 'left-20'}`}>
       
       {/* Search Input with overlay Dropdown */}
       <div className="flex items-center space-x-4 flex-1 relative">

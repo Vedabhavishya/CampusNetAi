@@ -8,6 +8,7 @@ import { StatusBadge, HealthIndicator } from '../components/EnterpriseWidgets';
 import { useNetworkStore } from '../contexts/NetworkStoreContext';
 import { useAuth } from '../contexts/AuthContext';
 import { NetworkDevice, Vlan } from '../types';
+import { useVlanInventory } from '../utils/vlanUtils';
 import { Layers, Activity, GitCommit, Settings, CheckCircle, Plus, Trash2, Edit3, ShieldAlert, Cpu } from 'lucide-react';
 
 interface RouteEntry {
@@ -38,6 +39,11 @@ export const CoreSwitchManager: React.FC = () => {
 
   const isReadOnly = user?.role === 'Network Engineer';
   const isLiveDevice = !!device?.telemetry;
+
+  // MAC Table Search & Filters
+  const [macSearchQuery, setMacSearchQuery] = useState('');
+  const [macVlanFilter, setMacVlanFilter] = useState('');
+  const [macInterfaceFilter, setMacInterfaceFilter] = useState('');
 
   // STP States
   const [stpMode, setStpMode] = useState<'RSTP' | 'MSTP'>('RSTP');
@@ -80,79 +86,104 @@ export const CoreSwitchManager: React.FC = () => {
     return bytes + ' B';
   };
 
-  // Dynamic VLAN rows computed from telemetry.vlans
-  const vlanData = useMemo(() => {
-    if (device && device.telemetry && Array.isArray(device.telemetry.vlans)) {
-      return device.telemetry.vlans.map((v: any) => ({
-        id: v.vlan_id || v.id,
-        name: v.name || v.vlan_name,
-        memberCount: v.member_count !== undefined ? v.member_count : (v.members ? v.members.length : '--'),
-        subnet: v.subnet || '--',
-        dhcpRange: v.dhcpRange || v.dhcp_range || '--'
-      }));
-    }
-    // Fallback to global vlans for backward compatibility
-    if (Array.isArray(vlans)) {
-      return vlans.map((v: any) => ({
-        id: v.id,
-        name: v.name,
-        memberCount: v.memberCount !== undefined ? v.memberCount : '--',
-        subnet: v.subnet || '--',
-        dhcpRange: v.dhcpRange || '--'
-      }));
-    }
-    return [];
-  }, [device, vlans]);
+  // Authoritative VLAN inventory computed via shared useVlanInventory hook
+  const vlanData = useVlanInventory();
 
-  // Dynamic ports configuration computed from telemetry.interfaces
+  // Dynamically filter vlan columns based on data availability
+  const vlanColumns = useMemo(() => {
+    const cols = [
+      { header: 'VLAN ID', accessor: 'id', sortable: true },
+      { header: 'Profile Name', accessor: 'name', sortable: true },
+    ];
+    
+    const hasMemberCount = vlanData.some(v => v.memberCount !== undefined && v.memberCount !== '--');
+    const hasActiveInterfaces = vlanData.some(v => v.activeInterfaces !== undefined && v.activeInterfaces !== 0 && v.activeInterfaces !== '--');
+    const hasSubnet = vlanData.some(v => v.subnet && v.subnet !== '--');
+    const hasGateway = vlanData.some(v => v.gateway && v.gateway !== '--');
+    const hasDhcpRange = vlanData.some(v => v.dhcpRange && v.dhcpRange !== '--');
+    const hasDescription = vlanData.some(v => v.description && v.description !== '--');
+
+    if (hasMemberCount) cols.push({ header: 'Members Count', accessor: 'memberCount' });
+    if (hasActiveInterfaces) cols.push({ header: 'Active Interfaces', accessor: 'activeInterfaces' });
+    if (hasSubnet) cols.push({ header: 'IP Subnet Address', accessor: 'subnet', className: 'font-mono' });
+    if (hasGateway) cols.push({ header: 'Gateway', accessor: 'gateway', className: 'font-mono' });
+    if (hasDhcpRange) cols.push({ header: 'DHCP Pool Range', accessor: 'dhcpRange', className: 'font-mono' });
+    if (hasDescription) cols.push({ header: 'Description', accessor: 'description' });
+
+    cols.push({
+      header: 'Actions',
+      accessor: (row: any) => (
+        <div className="flex items-center justify-end gap-1.5">
+          <Button
+            variant="outline"
+            onClick={() => triggerRenameVlan(row)}
+            className="p-1 h-8 w-8 flex items-center justify-center disabled:opacity-50"
+            disabled={isLiveDevice}
+            title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
+          >
+            <Edit3 className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => handleDeleteVlan(row.id)}
+            className="p-1 h-8 w-8 flex items-center justify-center text-rose-500 hover:text-rose-700 disabled:opacity-50"
+            disabled={isLiveDevice}
+            title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ),
+      className: 'text-right'
+    } as any);
+
+    return cols;
+  }, [vlanData, isLiveDevice]);
+
+  // Dynamic ports configuration computed from config.interfaces to show ONLY configurable physical switch interfaces
   const portsList = useMemo(() => {
-    if (device && device.telemetry && Array.isArray(device.telemetry.interfaces)) {
-      return device.telemetry.interfaces.map((i: any) => {
-        let assignedVlanStr = '--';
-        if (Array.isArray(device.telemetry.vlans)) {
-          const matchingVlan = device.telemetry.vlans.find((v: any) => 
-            Array.isArray(v.members) && v.members.some((m: string) => m.includes(i.interface))
-          );
-          if (matchingVlan) {
-            assignedVlanStr = `${matchingVlan.vlan_id || matchingVlan.id} (${matchingVlan.name || matchingVlan.vlan_name})`;
-          }
-        }
-        
-        let resolvedSpeed = i.speed;
-        if (!resolvedSpeed || resolvedSpeed === '--') {
-          let statsPort = device.telemetry?.port_statistics?.ports?.[i.interface];
-          if (!statsPort && i.interface.includes('.')) {
-            const baseInterface = i.interface.split('.')[0];
-            statsPort = device.telemetry?.port_statistics?.ports?.[baseInterface];
-          }
-          if (statsPort && statsPort.speed) resolvedSpeed = statsPort.speed;
-        }
-        if (resolvedSpeed && typeof resolvedSpeed === 'string') {
-          resolvedSpeed = resolvedSpeed.trim();
-          if (resolvedSpeed.toLowerCase() === '1000mbps') resolvedSpeed = '1000 Mbps';
-          if (resolvedSpeed.toLowerCase() === '10000mbps') resolvedSpeed = '10 Gbps';
-        }
+    if (!device) return [];
+    const configInterfaces = device.config?.interfaces || {};
+    
+    // Sort keys naturally (e.g. ge-0/0/2 before ge-0/0/10)
+    const sortedKeys = Object.keys(configInterfaces).sort((a, b) => {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
-        return {
-          name: i.interface,
-          adminState: i.admin || 'up',
-          linkState: i.link || 'up',
-          speed: resolvedSpeed || '--',
-          vlan: assignedVlanStr
-        };
-      });
-    }
-    // Fallback to config interface list for mock devices
-    if (device && device.config && device.config.interfaces) {
-      return Object.entries(device.config.interfaces).map(([name, conf]: [string, any]) => ({
+    return sortedKeys.map((name) => {
+      const config = (configInterfaces[name] || {}) as any;
+      
+      const description = config.description || '--';
+
+      // Find status and linkState from telemetry if available
+      let linkState = config.link || 'down';
+      let adminState = config.enabled ? 'up' : 'down';
+      let speed = config.speed || '--';
+      let vlan = config.vlan !== undefined ? String(config.vlan) : '--';
+      
+      if (device.telemetry && Array.isArray(device.telemetry.interfaces)) {
+        const telIface = device.telemetry.interfaces.find((i: any) => i.interface === name);
+        if (telIface) {
+          linkState = telIface.link || linkState;
+          adminState = telIface.admin || adminState;
+        }
+      }
+
+      if (speed && typeof speed === 'string') {
+        const cleanSpeed = speed.toLowerCase().trim();
+        if (cleanSpeed === '1000mbps' || cleanSpeed === '1gbps') speed = '1 Gbps';
+        if (cleanSpeed === '10000mbps' || cleanSpeed === '10gbps') speed = '10 Gbps';
+      }
+
+      return {
         name,
-        adminState: conf.enabled ? 'up' : 'down',
-        linkState: conf.enabled ? 'up' : 'down',
-        speed: conf.speed || '1000Mbps',
-        vlan: conf.vlan !== undefined && conf.vlan !== 0 ? String(conf.vlan) : '--'
-      }));
-    }
-    return [];
+        adminState,
+        linkState,
+        speed,
+        vlan,
+        description
+      };
+    });
   }, [device]);
 
   // Derived core switch routes
@@ -177,6 +208,42 @@ export const CoreSwitchManager: React.FC = () => {
     }
     return [];
   }, [device]);
+
+  // Filtered MAC Table
+  const filteredMacTable = useMemo(() => {
+    if (!device?.telemetry?.mac_table || !Array.isArray(device.telemetry.mac_table)) return [];
+    
+    return device.telemetry.mac_table.filter((m: any) => {
+      const matchesSearch = !macSearchQuery || 
+        m.mac_address.toLowerCase().includes(macSearchQuery.toLowerCase()) ||
+        m.interface.toLowerCase().includes(macSearchQuery.toLowerCase()) ||
+        String(m.vlan).toLowerCase().includes(macSearchQuery.toLowerCase());
+        
+      const matchesVlan = !macVlanFilter || String(m.vlan) === macVlanFilter;
+      const matchesInterface = !macInterfaceFilter || m.interface.toLowerCase().includes(macInterfaceFilter.toLowerCase());
+      
+      return matchesSearch && matchesVlan && matchesInterface;
+    });
+  }, [device, macSearchQuery, macVlanFilter, macInterfaceFilter]);
+
+  // CSV Exporter
+  const handleExportMacCsv = () => {
+    if (!filteredMacTable.length) return;
+    const headers = 'MAC Address,VLAN,Interface,Type\n';
+    const rows = filteredMacTable.map((m: any) => 
+      `"${m.mac_address}","${m.vlan}","${m.interface}","${m.type || 'Dynamic'}"`
+    ).join('\n');
+    
+    const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${device?.name || 'switch'}_mac_table.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Derived Link Aggregations
   const lags = useMemo(() => {
@@ -370,6 +437,84 @@ export const CoreSwitchManager: React.FC = () => {
             )}
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Switch Summary & Diagnostics Card */}
+              <Card title="Switch Summary & System Diagnostics" className="md:col-span-2" description="Comprehensive inventory and operational status details">
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-left text-xs font-sans text-slate-750 dark:text-slate-350">
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Switch Status:</span>
+                    <span className={`font-bold ${device.status === 'online' ? 'text-emerald-500' : 'text-slate-400'}`}>
+                      {device.status ? device.status.toUpperCase() : 'Unavailable'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Hostname:</span>
+                    <span className="font-bold text-slate-900 dark:text-white">{device.name || 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Model:</span>
+                    <span className="font-bold text-slate-900 dark:text-white">{device.model || 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Management IP:</span>
+                    <span className="font-mono font-bold text-slate-900 dark:text-white">{device.ipAddress || 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Software Version:</span>
+                    <span className="font-mono text-slate-900 dark:text-white">{device.version || 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Collector Name:</span>
+                    <span className="font-mono text-slate-900 dark:text-white">{device.collector?.name || 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Collector Status:</span>
+                    <span className="font-bold text-slate-900 dark:text-white">{device.collector?.status || (device.status === 'online' ? 'Active' : 'Inactive')}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Health Score:</span>
+                    <span className="font-bold text-emerald-500">{device.healthScore !== undefined ? `${device.healthScore}%` : 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">CPU Usage:</span>
+                    <span className="font-mono font-semibold text-slate-900 dark:text-white">{device.cpuUsage !== undefined ? `${device.cpuUsage}%` : 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Memory Usage:</span>
+                    <span className="font-mono font-semibold text-slate-900 dark:text-white">{device.memoryUsage !== undefined ? `${device.memoryUsage}%` : 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Uptime:</span>
+                    <span className="text-slate-900 dark:text-white">{device.uptime || 'Unavailable'}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Last Poll Timestamp:</span>
+                    <span className="text-slate-900 dark:text-white">
+                      {device.collector?.last_poll ? new Date(device.collector.last_poll).toLocaleTimeString() : 'Unavailable'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">SSH Latency:</span>
+                    <span className="font-mono text-slate-900 dark:text-white">
+                      {device.telemetry?.performance?.current?.ssh_latency_ms !== undefined
+                        ? `${device.telemetry.performance.current.ssh_latency_ms} ms`
+                        : 'Unavailable'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+                    <span className="text-slate-400">Physical Ports (Total / Active):</span>
+                    <span className="font-mono font-bold text-slate-900 dark:text-white">
+                      {(() => {
+                        const total = device.config?.interfaces ? Object.keys(device.config.interfaces).length : 0;
+                        const active = device.config?.interfaces 
+                          ? Object.values(device.config.interfaces).filter((i: any) => i.link === 'up').length 
+                          : 0;
+                        return total > 0 ? `${total} / ${active}` : 'Unavailable';
+                      })()}
+                    </span>
+                  </div>
+                </div>
+              </Card>
+
               {/* Virtual Chassis Card */}
               <Card title="Virtual Chassis Configuration" description="Multi-member active switch stack">
                 <div className="mt-3 text-left text-xs font-sans text-slate-700 dark:text-slate-300">
@@ -503,39 +648,7 @@ export const CoreSwitchManager: React.FC = () => {
 
             <Card className="p-0 overflow-hidden">
               <Table
-                columns={[
-                  { header: 'VLAN ID', accessor: 'id', sortable: true },
-                  { header: 'Profile Name', accessor: 'name', sortable: true },
-                  { header: 'Members Count', accessor: 'memberCount' },
-                  { header: 'IP Subnet Address', accessor: 'subnet', className: 'font-mono' },
-                  { header: 'DHCP Pool Range', accessor: 'dhcpRange', className: 'font-mono' },
-                  {
-                    header: 'Actions',
-                    accessor: (row: any) => (
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Button
-                          variant="outline"
-                          onClick={() => triggerRenameVlan(row)}
-                          className="p-1 h-8 w-8 flex items-center justify-center disabled:opacity-50"
-                          disabled={isLiveDevice}
-                          title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
-                        >
-                          <Edit3 className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleDeleteVlan(row.id)}
-                          className="p-1 h-8 w-8 flex items-center justify-center text-rose-500 hover:text-rose-700 disabled:opacity-50"
-                          disabled={isLiveDevice}
-                          title={isLiveDevice ? "Configuration not supported on live switch" : undefined}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ),
-                    className: 'text-right'
-                  }
-                ]}
+                columns={vlanColumns}
                 data={vlanData}
               />
             </Card>
@@ -543,17 +656,18 @@ export const CoreSwitchManager: React.FC = () => {
         )}
 
         {activeTab === 'interfaces' && (
-          <Card title="Interface Port Configurations" description="Assign desired VLAN profiles and enable/disable interfaces.">
+          <Card title="Interface Port Configurations" description="Assign desired VLAN profiles and enable/disable physical interfaces.">
             <div className="overflow-x-auto text-left">
               <table className="min-w-full divide-y divide-slate-200/50 dark:divide-slate-800/50 text-xs font-mono">
                 <thead className="bg-slate-50/50 dark:bg-slate-900/50">
                   <tr>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Interface Name</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Interface</th>
                     <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Status</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Admin State</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Administrative State</th>
                     <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Operational State</th>
                     <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Speed</th>
                     <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Assigned VLAN</th>
+                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Description</th>
                     <th className="px-6 py-3 text-slate-400 uppercase tracking-wider text-left">Action</th>
                   </tr>
                 </thead>
@@ -562,7 +676,7 @@ export const CoreSwitchManager: React.FC = () => {
                     <tr key={port.name}>
                       <td className="px-6 py-4 font-bold text-left">{port.name}</td>
                       <td className="px-6 py-4 text-left">
-                        <StatusBadge status={port.linkState === 'up' ? 'online' : 'offline'} />
+                        <span className={`inline-flex h-2.5 w-2.5 rounded-full ${port.linkState === 'up' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                       </td>
                       <td className="px-6 py-4 capitalize text-left">{port.adminState}</td>
                       <td className="px-6 py-4 capitalize text-left">{port.linkState}</td>
@@ -585,6 +699,7 @@ export const CoreSwitchManager: React.FC = () => {
                           port.vlan
                         )}
                       </td>
+                      <td className="px-6 py-4 text-left font-sans">{port.description}</td>
                       <td className="px-6 py-4 text-left">
                         <Button
                           variant="outline"
@@ -613,28 +728,46 @@ export const CoreSwitchManager: React.FC = () => {
                   <>
                     <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
                       <span className="text-slate-400">Collector Name</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.name}</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.name || 'Unavailable'}</span>
                     </div>
                     <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
                       <span className="text-slate-400">Collector Version</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.version}</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.version || 'Unavailable'}</span>
                     </div>
                     <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
                       <span className="text-slate-400">Device Family</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.device_family}</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.device_family || 'Unavailable'}</span>
                     </div>
                     <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Last Poll Timestamp</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.last_poll}</span>
+                      <span className="text-slate-400">Last Successful Poll</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">
+                        {device.collector.last_poll ? new Date(device.collector.last_poll).toLocaleString() : 'Unavailable'}
+                      </span>
                     </div>
                     <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
                       <span className="text-slate-400">Poll Duration</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.poll_duration_ms} ms</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">
+                        {device.collector.poll_duration_ms !== undefined ? `${device.collector.poll_duration_ms} ms` : 'Unavailable'}
+                      </span>
                     </div>
                     <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Commands Executed / Failed</span>
+                      <span className="text-slate-400">SSH Latency</span>
                       <span className="text-slate-800 dark:text-slate-200 text-right">
-                        {device.collector.commands_executed} / {device.collector.commands_failed}
+                        {device.telemetry?.performance?.current?.ssh_latency_ms !== undefined 
+                          ? `${device.telemetry.performance.current.ssh_latency_ms} ms` 
+                          : (device.health?.ssh_latency_ms !== undefined ? `${device.health.ssh_latency_ms} ms` : 'Unavailable')}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Commands Executed</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right">
+                        {device.collector.commands_executed !== undefined ? device.collector.commands_executed : 'Unavailable'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
+                      <span className="text-slate-400">Commands Failed</span>
+                      <span className="text-slate-800 dark:text-slate-200 text-right text-rose-500">
+                        {device.collector.commands_failed !== undefined ? device.collector.commands_failed : 'Unavailable'}
                       </span>
                     </div>
                   </>
@@ -648,10 +781,6 @@ export const CoreSwitchManager: React.FC = () => {
                       <span className={device.health.connected ? 'text-emerald-500 text-right' : 'text-rose-500 text-right'}>
                         {device.health.status.toUpperCase()}
                       </span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">SSH Latency</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.health.ssh_latency_ms} ms</span>
                     </div>
                   </>
                 )}
@@ -723,8 +852,42 @@ export const CoreSwitchManager: React.FC = () => {
           <div className="space-y-6 text-left text-xs font-semibold">
             {device.telemetry && device.telemetry.mac_table && device.telemetry.mac_table.length > 0 ? (
               <Card title="Live Switch MAC Address Table" className="p-0 overflow-hidden">
+                {/* Search & Filter Bar */}
+                <div className="p-4 bg-slate-500/5 border-b border-slate-200/10 flex flex-wrap gap-4 items-center">
+                  <div className="flex-1 min-w-[200px]">
+                    <input
+                      type="text"
+                      placeholder="Search MAC, VLAN, or Interface..."
+                      value={macSearchQuery}
+                      onChange={(e) => setMacSearchQuery(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Filter by VLAN..."
+                      value={macVlanFilter}
+                      onChange={(e) => setMacVlanFilter(e.target.value)}
+                      className="w-32 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Filter by Interface..."
+                      value={macInterfaceFilter}
+                      onChange={(e) => setMacInterfaceFilter(e.target.value)}
+                      className="w-36 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-200"
+                    />
+                  </div>
+                  <Button variant="outline" className="text-xs py-1.5 px-3" onClick={handleExportMacCsv}>
+                    Export CSV
+                  </Button>
+                </div>
+
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-slate-200/10 text-left">
+                  <table className="min-w-full divide-y divide-slate-200/10 text-left font-sans">
                     <thead className="bg-slate-500/5">
                       <tr>
                         <th className="px-4 py-2 text-slate-400">MAC Address</th>
@@ -734,7 +897,7 @@ export const CoreSwitchManager: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200/10 font-mono text-[11px]">
-                      {device.telemetry.mac_table.map((m: any, i: number) => (
+                      {filteredMacTable.map((m: any, i: number) => (
                         <tr key={i}>
                           <td className="px-4 py-2 font-bold">{m.mac_address}</td>
                           <td className="px-4 py-2">{m.vlan}</td>
@@ -742,6 +905,13 @@ export const CoreSwitchManager: React.FC = () => {
                           <td className="px-4 py-2">{m.type || 'Dynamic'}</td>
                         </tr>
                       ))}
+                      {filteredMacTable.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-slate-400 font-medium">
+                            No matching MAC addresses found.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -794,8 +964,9 @@ export const CoreSwitchManager: React.FC = () => {
             </div>
 
             {routesList.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200/10">
-                No route information available.
+              <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200/10 space-y-1">
+                <p className="font-bold text-slate-550 dark:text-slate-300">No static routes are currently configured.</p>
+                <p className="text-[11px] text-slate-400">This switch is operating using directly connected and dynamic routes only.</p>
               </div>
             ) : (
               <Card className="p-0 overflow-hidden">
@@ -828,8 +999,24 @@ export const CoreSwitchManager: React.FC = () => {
         {activeTab === 'lags' && (
           <Card title="Link Aggregation Groups (LAG / LACP)" description="Trunk aggregations to spine switches:">
             {lags.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs">
-                No Link Aggregation information available.
+              <div className="space-y-4 text-left">
+                <div className="bg-slate-500/5 p-4 rounded-xl border border-slate-200/10 grid grid-cols-1 md:grid-cols-3 gap-6 text-xs font-sans text-slate-705 dark:text-slate-355">
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-slate-400 uppercase tracking-wider text-[10px]">LACP Status</h5>
+                    <p className="font-semibold text-slate-900 dark:text-white">Inactive</p>
+                  </div>
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-slate-400 uppercase tracking-wider text-[10px]">Configured Groups</h5>
+                    <p className="font-semibold text-slate-900 dark:text-white">0 Groups</p>
+                  </div>
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-slate-400 uppercase tracking-wider text-[10px]">Member Interfaces</h5>
+                    <p className="font-semibold text-slate-900 dark:text-white">None</p>
+                  </div>
+                </div>
+                <div className="p-8 text-center text-slate-400 font-medium font-sans text-xs bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200/10">
+                  No active Link Aggregation configuration detected.
+                </div>
               </div>
             ) : (
               <Table
@@ -901,25 +1088,35 @@ export const CoreSwitchManager: React.FC = () => {
               {device.telemetry?.stp ? (
                 <div className="text-xs text-slate-700 dark:text-slate-300 flex flex-col space-y-2 mt-2 font-sans">
                   <div className="flex justify-between py-1 border-b border-slate-200/10">
-                    <span className="text-slate-400">Protocol:</span>
+                    <span className="text-slate-400">Mode:</span>
                     <span className="font-mono font-bold">{device.telemetry.stp.protocol || 'RSTP'}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/10">
-                    <span className="text-slate-400">Bridge ID:</span>
-                    <span className="font-mono font-bold">{device.telemetry.stp.bridge_id || '--'}</span>
+                    <span className="text-slate-400">Root Bridge:</span>
+                    <span className="font-mono font-bold">
+                      {device.telemetry.stp.is_root 
+                        ? 'This Switch (Self)' 
+                        : (device.telemetry.stp.root_bridge_id || 'Unavailable')}
+                    </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/10">
-                    <span className="text-slate-400">Priority:</span>
+                    <span className="text-slate-400">Bridge Priority:</span>
                     <span className="font-mono">{device.telemetry.stp.priority || '32768'}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/10">
-                    <span className="text-slate-400">Role:</span>
-                    <span className="font-bold text-emerald-500">{device.telemetry.stp.role || 'Designated'}</span>
+                    <span className="text-slate-400">Forwarding Ports:</span>
+                    <span className="font-mono text-emerald-500">
+                      {device.telemetry.stp.forwarding_ports !== undefined 
+                        ? (Array.isArray(device.telemetry.stp.forwarding_ports) ? device.telemetry.stp.forwarding_ports.join(', ') : device.telemetry.stp.forwarding_ports) 
+                        : 'Unavailable'}
+                    </span>
                   </div>
                   <div className="flex justify-between py-1">
-                    <span className="text-slate-400">Status:</span>
-                    <span className={device.telemetry.stp.is_root ? 'text-emerald-500 font-bold' : 'text-slate-400'}>
-                      {device.telemetry.stp.is_root ? 'ROOT Bridge' : 'Non-Root'}
+                    <span className="text-slate-400">Blocked Ports:</span>
+                    <span className="font-mono text-rose-500">
+                      {device.telemetry.stp.blocked_ports !== undefined 
+                        ? (Array.isArray(device.telemetry.stp.blocked_ports) ? device.telemetry.stp.blocked_ports.join(', ') : device.telemetry.stp.blocked_ports) 
+                        : 'None'}
                     </span>
                   </div>
                 </div>
