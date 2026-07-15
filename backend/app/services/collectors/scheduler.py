@@ -65,6 +65,8 @@ async def start_scheduler():
                             }
                             
                         status_data = {**startup_data, **fast_data}
+                        if "inventory" in status_data and "uptime" in status_data["inventory"]:
+                            status_data["uptime"] = status_data["inventory"]["uptime"]
                         status_data["telemetry"] = {
                             **status_data.get("telemetry", {}),
                             **routes_data.get("telemetry", {}),
