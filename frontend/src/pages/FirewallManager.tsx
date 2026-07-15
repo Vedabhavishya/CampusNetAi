@@ -1,135 +1,69 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
-import { Table } from '../components/Table';
-import { Modal } from '../components/Modal';
-import { Wizard } from '../components/Wizard';
-import { DiffViewer } from '../components/DiffViewer';
 import { StatusBadge, HealthIndicator } from '../components/EnterpriseWidgets';
 import { useNetworkStore } from '../contexts/NetworkStoreContext';
 import { useAuth } from '../contexts/AuthContext';
-import { NetworkDevice, AuditLog, NetworkAlert } from '../types';
 import { 
-  Shield, Plus, AlertTriangle, ShieldCheck, Play, ArrowUpRight, 
-  Trash2, Settings, Edit3, Activity, Network, Key, ListFilter, FileText, History, RefreshCw, Layers 
+  Shield, AlertTriangle, ShieldCheck, ArrowUpRight, ArrowDownRight,
+  Activity, Network, Key, ListFilter, FileText, History, RefreshCw, Layers, 
+  Search, Users, Info, Settings, Clock, Server, Play, Plus
 } from 'lucide-react';
-
-interface SecurityRule {
-  id: string;
-  name: string;
-  srcZone: string;
-  destZone: string;
-  service: string;
-  action: 'permit' | 'deny';
-  enabled: boolean;
-}
-
-interface NatRule {
-  id: string;
-  name: string;
-  originalPort: number;
-  translatedPort: number;
-  translatedAddress: string;
-  enabled: boolean;
-}
-
-interface VpnTunnel {
-  id: string;
-  name: string;
-  remotePeer: string;
-  localAddress: string;
-  preSharedKey: string;
-  status: 'up' | 'down';
-  enabled: boolean;
-}
 
 export const FirewallManager: React.FC = () => {
   const { user } = useAuth();
-  const { 
-    devices, 
-    runProvisioningTask, 
-    alerts, 
-    logs, 
-    backupDeviceConfig,
-    rollbackConfiguration 
-  } = useNetworkStore();
+  const { devices, runProvisioningTask } = useNetworkStore();
+  const [activeTab, setActiveTab] = useState<string>('overview');
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'interfaces' | 'policies' | 'nat' | 'vpn' | 'dhcp' | 'dns' | 'routing' | 'logs' | 'backup' | 'firmware' | 'system' | 'telemetry'>('overview');
+  // Search & Filter state for Live Sessions
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [sessionProtoFilter, setSessionProtoFilter] = useState('all');
 
-  // Load Firewall device
+  // Search state for Connected Clients
+  const [clientSearch, setClientSearch] = useState('');
+
+  // 1. Fetch Firewall device
   const device = useMemo(() => {
     return devices.find(d => d.type === 'firewall') || null;
   }, [devices]);
 
+  // 2. Poll read-only cache-backed analytics endpoint (never triggers direct SSH)
+  const [analytics, setAnalytics] = useState<any>({
+    top_clients: [],
+    top_destinations: [],
+    bandwidth: { total_upload_bytes: 0, total_download_bytes: 0, total_throughput_bytes: 0, client_bandwidth_usage: [] },
+    dns: [],
+    applications: [],
+    closed_sessions: [],
+    events: []
+  });
+
   useEffect(() => {
-    if (device?.health) {
-      const isConnected = device.health.connected;
-      const status = device.health.status;
-      if ((!isConnected && status === 'online') || (isConnected && status === 'offline')) {
-        console.warn(`[Firewall Health Consistency] Warning: Device "${device.name}" has inconsistent health metadata (connected=${isConnected}, status="${status}").`);
+    let active = true;
+    const fetchAnalytics = async () => {
+      try {
+        const token = localStorage.getItem('token') || '';
+        const res = await fetch('http://localhost:8000/api/v1/firewall/analytics', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok && active) {
+          const data = await res.json();
+          setAnalytics(data);
+        }
+      } catch (err) {
+        console.error('[FirewallManager] Failed to fetch analytics:', err);
       }
-    }
-  }, [device]);
-
-  const isReadOnly = user?.role === 'Network Engineer';
-
-  // --- POLICIES CRUD STATE ---
-  const [isAddPolicyOpen, setIsAddPolicyOpen] = useState(false);
-  const [polName, setPolName] = useState('');
-  const [polSrcZone, setPolSrcZone] = useState('Trust');
-  const [polDestZone, setPolDestZone] = useState('Untrust');
-  const [polService, setPolService] = useState('HTTP/HTTPS');
-  const [polAction, setPolAction] = useState<'permit' | 'deny'>('permit');
-
-  // --- NAT CRUD STATE ---
-  const [isAddNatOpen, setIsAddNatOpen] = useState(false);
-  const [natName, setNatName] = useState('');
-  const [natOrigPort, setNatOrigPort] = useState(80);
-  const [natTransPort, setNatTransPort] = useState(8080);
-  const [natTransAddr, setNatTransAddr] = useState('10.10.20.50');
-
-  // --- VPN CRUD STATE ---
-  const [isAddVpnOpen, setIsAddVpnOpen] = useState(false);
-  const [vpnName, setVpnName] = useState('');
-  const [vpnRemotePeer, setVpnRemotePeer] = useState('198.51.100.10');
-  const [vpnLocalAddr, setVpnLocalAddr] = useState('203.0.113.2');
-  const [vpnPresharedKey, setVpnPresharedKey] = useState('');
-
-  // --- BACKUP STATE ---
-  const [backupReason, setBackupReason] = useState('');
-  const [isBackingUp, setIsBackingUp] = useState(false);
-
-  // --- FIRMWARE STATE ---
-  const [isUpgrading, setIsUpgrading] = useState(false);
-
-  // 1. Policies derived
-  const policies = useMemo(() => {
-    if (!device) return [];
-    const config = device.config as any;
-    return config.firewallPolicies || [
-      { id: 'pol-1', name: 'Allow-Internal-DNS', srcZone: 'Trust', destZone: 'Untrust', service: 'UDP 53', action: 'permit', enabled: true },
-      { id: 'pol-2', name: 'Block-Malicious-IPs', srcZone: 'Untrust', destZone: 'Trust', service: 'Any', action: 'deny', enabled: true },
-      { id: 'pol-3', name: 'Corp-Web-Browsing', srcZone: 'Trust', destZone: 'Untrust', service: 'HTTP/HTTPS', action: 'permit', enabled: true }
-    ];
-  }, [device]);
-
-  // 2. NAT derived
-  const natRules = useMemo(() => {
-    if (!device) return [];
-    const config = device.config as any;
-    return config.natRules || [
-      { id: 'nat-1', name: 'Web-Server-Forward', originalPort: 80, translatedPort: 8080, translatedAddress: '10.10.20.50', enabled: true }
-    ];
-  }, [device]);
-
-  // 3. VPN Tunnels derived
-  const vpnTunnels = useMemo(() => {
-    if (!device) return [];
-    const config = device.config as any;
-    return config.vpnTunnels || [
-      { id: 'vpn-1', name: 'HQ-to-Branch-IPSec', remotePeer: '198.51.100.10', localAddress: '203.0.113.2', preSharedKey: 'superkey123', status: 'up', enabled: true }
-    ];
-  }, [device]);
+    };
+    
+    fetchAnalytics();
+    const interval = setInterval(fetchAnalytics, 5000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   if (!device) {
     return (
@@ -139,319 +73,106 @@ export const FirewallManager: React.FC = () => {
     );
   }
 
-  // Desired state commit helper
-  const commitFirewallConfig = async (taskName: string, updatedConfigFields: any) => {
-    const updatedConfig = { ...device.config, ...updatedConfigFields };
-    return runProvisioningTask(
-      taskName,
-      [device.name],
-      async () => {
-        // Save back to local devices state
-        const savedDevices = JSON.parse(localStorage.getItem('cn-devices') || '[]');
-        const index = savedDevices.findIndex((d: any) => d.id === device.id);
-        if (index !== -1) {
-          savedDevices[index].config = updatedConfig;
-          localStorage.setItem('cn-devices', JSON.stringify(savedDevices));
-          // Dispatch custom event to notify store of manual updates
-          window.dispatchEvent(new Event('storage'));
-        }
-        return true;
-      },
-      device.config
-    );
-  };
+  const telemetry = device.telemetry || {};
+  const sessionsList = telemetry.sessions || [];
+  const interfacesList = telemetry.interfaces || [];
+  const routesList = telemetry.routes || [];
+  const policiesList = telemetry.policies || [];
+  const correlatedSessions = telemetry.correlated_sessions || [];
 
-  // Toggles Port state
-  const handleToggleInterface = async (portKey: string) => {
-    const interfaces = { ...device.config.interfaces };
-    interfaces[portKey].enabled = !interfaces[portKey].enabled;
-    await commitFirewallConfig(`Toggle Port admin status: ${portKey}`, { interfaces });
-  };
+  // Filtered Live Sessions
+  const filteredSessions = useMemo(() => {
+    return sessionsList.filter((s: any) => {
+      const matchSearch = 
+        s.source_ip?.includes(sessionSearch) || 
+        s.destination_ip?.includes(sessionSearch) || 
+        s.policy_name?.toLowerCase().includes(sessionSearch.toLowerCase());
+      
+      const matchProto = 
+        sessionProtoFilter === 'all' || 
+        s.protocol?.toLowerCase() === sessionProtoFilter.toLowerCase();
 
-  // --- POLICIES CRUD HANDLERS ---
-  const handleAddPolicy = async () => {
-    const newPol: SecurityRule = {
-      id: 'pol-' + Math.random().toString(36).substring(7),
-      name: polName,
-      srcZone: polSrcZone,
-      destZone: polDestZone,
-      service: polService,
-      action: polAction,
-      enabled: true
-    };
-    await commitFirewallConfig(`Add Firewall Security Policy: ${polName}`, {
-      firewallPolicies: [...policies, newPol]
+      return matchSearch && matchProto;
     });
-    setPolName('');
-    setIsAddPolicyOpen(false);
-  };
+  }, [sessionsList, sessionSearch, sessionProtoFilter]);
 
-  const handleDeletePolicy = async (id: string) => {
-    if (confirm('De-authorize and remove this firewall security policy?')) {
-      const filtered = policies.filter((p: SecurityRule) => p.id !== id);
-      await commitFirewallConfig('Delete Firewall Security Policy', { firewallPolicies: filtered });
-    }
-  };
-
-  const handleTogglePolicy = async (id: string) => {
-    const updated = policies.map((p: SecurityRule) => p.id === id ? { ...p, enabled: !p.enabled } : p);
-    await commitFirewallConfig('Toggle Firewall Security Policy status', { firewallPolicies: updated });
-  };
-
-  // --- NAT CRUD HANDLERS ---
-  const handleAddNat = async () => {
-    const newNat: NatRule = {
-      id: 'nat-' + Math.random().toString(36).substring(7),
-      name: natName,
-      originalPort: Number(natOrigPort),
-      translatedPort: Number(natTransPort),
-      translatedAddress: natTransAddr,
-      enabled: true
-    };
-    await commitFirewallConfig(`Create NAT Port Forwarding: ${natName}`, {
-      natRules: [...natRules, newNat]
-    });
-    setNatName('');
-    setIsAddNatOpen(false);
-  };
-
-  const handleDeleteNat = async (id: string) => {
-    if (confirm('Delete this NAT port forwarding binding?')) {
-      const filtered = natRules.filter((n: NatRule) => n.id !== id);
-      await commitFirewallConfig('Delete NAT Forwarding Rule', { natRules: filtered });
-    }
-  };
-
-  const handleToggleNat = async (id: string) => {
-    const updated = natRules.map((n: NatRule) => n.id === id ? { ...n, enabled: !n.enabled } : n);
-    await commitFirewallConfig('Toggle NAT Rule status', { natRules: updated });
-  };
-
-  // --- VPN CRUD HANDLERS ---
-  const handleAddVpn = async () => {
-    const newVpn: VpnTunnel = {
-      id: 'vpn-' + Math.random().toString(36).substring(7),
-      name: vpnName,
-      remotePeer: vpnRemotePeer,
-      localAddress: vpnLocalAddr,
-      preSharedKey: vpnPresharedKey,
-      status: 'up',
-      enabled: true
-    };
-    await commitFirewallConfig(`Establish IPSec VPN Tunnel: ${vpnName}`, {
-      vpnTunnels: [...vpnTunnels, newVpn]
-    });
-    setVpnName('');
-    setIsAddVpnOpen(false);
-  };
-
-  const handleDeleteVpn = async (id: string) => {
-    if (confirm('Teardown and terminate this IPSec VPN tunnel connection?')) {
-      const filtered = vpnTunnels.filter((v: VpnTunnel) => v.id !== id);
-      await commitFirewallConfig('Teardown IPSec VPN Tunnel', { vpnTunnels: filtered });
-    }
-  };
-
-  const handleToggleVpn = async (id: string) => {
-    const updated = vpnTunnels.map((v: VpnTunnel) => v.id === id ? { ...v, enabled: !v.enabled } : v);
-    await commitFirewallConfig('Toggle VPN tunnel status', { vpnTunnels: updated });
-  };
-
-  // --- SYSTEM PREVIEW DIFFS WIZARDS ---
-  const addPolicySteps = [
-    {
-      title: 'Define Zones',
-      content: (
-        <div className="space-y-4 text-left font-sans">
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Policy Name</label>
-            <input
-              type="text"
-              placeholder="e.g. Allow-HTTPS-Outbound"
-              value={polName}
-              onChange={(e) => setPolName(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Source Security Zone</label>
-              <select
-                value={polSrcZone}
-                onChange={(e) => setPolSrcZone(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-              >
-                <option value="Trust">Trust (Internal LAN)</option>
-                <option value="Untrust">Untrust (WAN Internet)</option>
-                <option value="IoT-VLAN">IoT-VLAN Isolation</option>
-                <option value="Guest-VLAN">Guest-VLAN Isolation</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Destination Security Zone</label>
-              <select
-                value={polDestZone}
-                onChange={(e) => setPolDestZone(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-              >
-                <option value="Untrust">Untrust (WAN Internet)</option>
-                <option value="Trust">Trust (Internal LAN)</option>
-                <option value="DMZ">DMZ Web Server</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      ),
-      validate: () => {
-        if (!polName.trim()) return 'Policy name cannot be empty.';
-        return true;
+  // Filtered Correlated Clients
+  const filteredClients = useMemo(() => {
+    const grouped: { [ip: string]: any } = {};
+    correlatedSessions.forEach((s: any) => {
+      const ip = s.client_ip;
+      if (!grouped[ip]) {
+        grouped[ip] = {
+          client_ip: ip,
+          client_name: s.client_name,
+          ap_name: s.ap_name,
+          switch_name: s.switch_name,
+          switch_port: s.switch_port,
+          sessions_count: 0,
+          upload: 0,
+          download: 0,
+          policy: s.policy || 'Allow-Web'
+        };
       }
-    },
-    {
-      title: 'Action Protocol',
-      content: (
-        <div className="space-y-4 text-left">
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Service Protocol</label>
-            <input
-              type="text"
-              placeholder="e.g. TCP 443 (HTTPS) or Any"
-              value={polService}
-              onChange={(e) => setPolService(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Action Zone</label>
-            <div className="flex gap-4 pt-1">
-              {['permit', 'deny'].map(act => (
-                <label key={act} className="flex items-center gap-2 cursor-pointer text-sm font-semibold capitalize text-slate-700 dark:text-slate-200">
-                  <input
-                    type="radio"
-                    name="policyAction"
-                    value={act}
-                    checked={polAction === act}
-                    onChange={() => setPolAction(act as any)}
-                    className="text-brand-500"
-                  />
-                  {act}
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      title: 'Preview Diff',
-      content: (
-        <div className="space-y-4 text-left">
-          <p className="text-xs text-slate-500">Preview policy configuration diff before committing to SRX active rules list:</p>
-          <DiffViewer
-            prev={policies}
-            current={[
-              ...policies,
-              { id: 'temp-pol-id', name: polName, srcZone: polSrcZone, destZone: polDestZone, service: polService, action: polAction, enabled: true }
-            ]}
-          />
-        </div>
-      )
-    }
-  ];
+      grouped[ip].sessions_count += 1;
+      grouped[ip].upload += (s.bytes || 0) * 0.45; // split upload approximation
+      grouped[ip].download += (s.bytes || 0) * 0.55; // split download approximation
+    });
 
-  // DHCP derived leases specifically mapping to firewall IPs
-  const firewallDhcpLeases = useMemo(() => {
-    const allLeases = JSON.parse(localStorage.getItem('cn-dhcp-leases') || '[]');
-    return allLeases;
-  }, []);
-
-  // System Logs
-  const syslogAlerts = useMemo(() => {
-    return alerts.filter(a => a.deviceId === device.id || a.category === 'security');
-  }, [alerts, device]);
-
-  // Backups History Snapshot
-  const backupsList = useMemo(() => {
-    const list = logs.filter(l => l.target.includes(device.name) && l.action.includes('Snapshot'));
-    return list;
-  }, [logs, device]);
-
-  const handleBackup = async () => {
-    if (!backupReason) return;
-    setIsBackingUp(true);
-    try {
-      await backupDeviceConfig(device.id, backupReason);
-      setBackupReason('');
-    } finally {
-      setIsBackingUp(false);
-    }
-  };
-
-  const handleRollback = async (backupId: string) => {
-    if (confirm('Rollback firewall configuration to this snapshot?')) {
-      await rollbackConfiguration(backupId);
-    }
-  };
-
-  const handleUpgradeFirmware = async () => {
-    setIsUpgrading(true);
-    await runProvisioningTask(
-      `Upgrade baseline firmware: ${device.name}`,
-      [device.name],
-      async () => {
-        // Mock update version
-        const savedDevices = JSON.parse(localStorage.getItem('cn-devices') || '[]');
-        const index = savedDevices.findIndex((d: any) => d.id === device.id);
-        if (index !== -1) {
-          savedDevices[index].version = 'JunOS 23.1R2 (Upgraded)';
-          localStorage.setItem('cn-devices', JSON.stringify(savedDevices));
-          window.dispatchEvent(new Event('storage'));
-        }
-        return true;
-      }
+    return Object.values(grouped).filter((c: any) => 
+      c.client_ip.includes(clientSearch) || 
+      c.client_name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+      c.ap_name.toLowerCase().includes(clientSearch.toLowerCase())
     );
-    setIsUpgrading(false);
+  }, [correlatedSessions, clientSearch]);
+
+  // Format Helper for traffic sizes
+  const formatBytes = (bytes: number) => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
   return (
     <div className="space-y-6">
       {/* Title Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div className="flex items-center space-x-3 text-left">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left">
+        <div className="flex items-center space-x-3">
           <div className="h-10 w-10 bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-400 rounded-xl flex items-center justify-center">
             <Shield className="h-5 w-5" />
           </div>
           <div>
             <h1 className="text-2xl font-bold font-display text-slate-900 dark:text-white m-0">
-              Firewall Configuration Console
+              Firewall Session Console
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Configure unified security zone definitions, NAT bindings, and site-to-site VPN tunnels on {device.name}.
+              Stateless CLI-polling session logs, client path correlation, and anomaly detectors on {device.name}.
             </p>
           </div>
         </div>
       </div>
 
       {/* Tabs navigation panel */}
-      <div className="flex items-center gap-1.5 border-b border-slate-200 dark:border-slate-800 pb-px overflow-x-auto text-xs shrink-0 select-none">
+      <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 pb-px overflow-x-auto text-xs shrink-0 select-none">
         {[
           { id: 'overview', label: 'Overview', icon: <Activity className="h-4 w-4" /> },
           { id: 'interfaces', label: 'Interfaces', icon: <Network className="h-4 w-4" /> },
+          { id: 'live-sessions', label: 'Live Sessions', icon: <Clock className="h-4 w-4" /> },
+          { id: 'connected-clients', label: 'Connected Clients', icon: <Users className="h-4 w-4" /> },
+          { id: 'top-destinations', label: 'Top Destinations', icon: <Layers className="h-4 w-4" /> },
+          { id: 'top-applications', label: 'Top Applications', icon: <ListFilter className="h-4 w-4" /> },
+          { id: 'bandwidth', label: 'Bandwidth Usage', icon: <ArrowUpRight className="h-4 w-4" /> },
+          { id: 'dns-activity', label: 'DNS Activity', icon: <FileText className="h-4 w-4" /> },
+          { id: 'routes', label: 'Static Routes', icon: <Settings className="h-4 w-4" /> },
           { id: 'policies', label: 'Security Policies', icon: <Shield className="h-4 w-4" /> },
-          { id: 'telemetry', label: 'Collector & Live Telemetry', icon: <Layers className="h-4 w-4" /> },
-          { id: 'nat', label: 'NAT Forwarding', icon: <Plus className="h-4 w-4" /> },
-          { id: 'vpn', label: 'IPSec VPN', icon: <Key className="h-4 w-4" /> },
-          { id: 'dhcp', label: 'DHCP Status', icon: <ListFilter className="h-4 w-4" /> },
-          { id: 'dns', label: 'DNS Settings', icon: <Settings className="h-4 w-4" /> },
-          { id: 'routing', label: 'Static Routes', icon: <Settings className="h-4 w-4" /> },
-          { id: 'logs', label: 'Syslog Alarms', icon: <FileText className="h-4 w-4" /> },
-          { id: 'backup', label: 'Restore Snapshots', icon: <History className="h-4 w-4" /> },
-          { id: 'firmware', label: 'Firmware Upgrades', icon: <RefreshCw className="h-4 w-4" /> }
+          { id: 'events', label: 'Events Log', icon: <History className="h-4 w-4" /> }
         ].map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={`px-4 py-2.5 border-b-2 font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 ${
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3 py-2.5 border-b-2 font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 ${
               activeTab === tab.id 
                 ? 'border-brand-500 text-brand-500 font-bold' 
                 : 'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 font-medium'
@@ -465,641 +186,528 @@ export const FirewallManager: React.FC = () => {
 
       {/* Tab Screen Content */}
       <div className="space-y-6">
+        
+        {/* Tab 1: Overview */}
         {activeTab === 'overview' && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card title="Threat Protection status" description="Unified Intrusion Engine stats">
-              <div className="flex items-center space-x-3.5 mt-3 text-left">
-                <div className="h-12 w-12 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0">
-                  <ShieldCheck className="h-6 w-6" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">IPS Shield Enabled</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Signature DB version: 2026.07.07 (Latest)</p>
-                </div>
-              </div>
-            </Card>
-
-            <Card title="Active Network Sessions" description="Total tracked connection flows">
-              <div className="mt-3 text-left">
-                <h3 className="text-2xl font-extrabold font-mono text-slate-900 dark:text-white">1,482</h3>
-                <p className="text-xs text-slate-500 mt-1 flex items-center">
-                  <ArrowUpRight className="h-4 w-4 text-emerald-500 mr-1" />
-                  Peak traffic load today: 2,890 flows
-                </p>
-              </div>
-            </Card>
-
-            <Card title="Hardware Device Status" description="Management node status link">
-              <div className="mt-3 flex items-center justify-between text-xs font-medium text-left">
-                <div>
-                  <p className="text-slate-400">Node model</p>
-                  <p className="text-slate-700 dark:text-slate-300 mt-0.5">{device.model}</p>
-                </div>
-                <div>
-                  <p className="text-slate-400">Uptime</p>
-                  <p className="text-slate-700 dark:text-slate-300 mt-0.5">{device.uptime}</p>
-                </div>
-                <div>
-                  <p className="text-slate-400">Health Index</p>
-                  <p className="text-emerald-500 font-semibold mt-0.5">{device.healthScore}%</p>
-                </div>
-              </div>
-            </Card>
-          </div>
-        )}
-
-        {activeTab === 'telemetry' && (
-          <div className="space-y-6 text-left text-xs font-semibold">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Health & Collector Metadata */}
-              <Card title="Collector & Health Metadata" className="space-y-3">
-                {device.collector ? (
-                  <>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Collector Name</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.name}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Collector Version</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.version}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Device Family</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.device_family}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Last Poll Timestamp</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.last_poll}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Poll Duration</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.collector.poll_duration_ms} ms</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Commands Executed / Failed</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">
-                        {device.collector.commands_executed} / {device.collector.commands_failed}
-                      </span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-slate-400">No collector metadata available.</div>
-                )}
-                {device.health && (
-                  <>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10 pt-2 font-bold text-slate-700 dark:text-slate-300">
-                      <span>Connection Status</span>
-                      <span className={device.health.connected ? 'text-emerald-500 text-right' : 'text-rose-500 text-right'}>
-                        {device.health.status.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">SSH Latency</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.health.ssh_latency_ms} ms</span>
-                    </div>
-                  </>
-                )}
-              </Card>
-
-              {/* Inventory Metadata */}
-              <Card title="Live Inventory details" className="space-y-3">
-                {device.inventory ? (
-                  <>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Hostname</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hostname}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Vendor / Family</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.vendor} {device.inventory.family}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Model</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.model}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Serial Number</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.serial}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Software Version</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right font-mono">{device.inventory.software_version}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1 border-b border-slate-200/10">
-                      <span className="text-slate-400">Hardware Revision</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.hardware_revision}</span>
-                    </div>
-                    <div className="grid grid-cols-2 py-1">
-                      <span className="text-slate-400">System Uptime</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">{device.inventory.uptime}</span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-slate-400">No inventory details available.</div>
-                )}
-              </Card>
-            </div>
-
-            {/* Raw Outputs */}
-            {device.raw && Object.keys(device.raw).length > 0 && (
-              <Card title="Raw CLI commands Outcomes" description="Expand to view exact outputs returned from the live device:">
-                <div className="space-y-2 mt-2 font-mono text-[11px]">
-                  {Object.entries(device.raw).map(([cmd, res]: [string, any]) => (
-                    <details key={cmd} className="bg-slate-500/5 rounded-lg border border-slate-200/10 overflow-hidden font-mono">
-                      <summary className="px-4 py-2 font-bold cursor-pointer hover:bg-slate-500/10 flex justify-between select-none">
-                        <span>{cmd}</span>
-                        <span className={res.success ? 'text-emerald-500' : 'text-rose-500'}>
-                          {res.success ? 'SUCCESS' : 'FAILED'}
-                        </span>
-                      </summary>
-                      <div className="p-3 border-t border-slate-200/10 whitespace-pre overflow-x-auto max-h-48 text-[10px] text-slate-650 bg-slate-900/50">
-                        {res.output || res.error || 'Empty Output.'}
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              </Card>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'interfaces' && (
-          <Card title="Physical Port Interfaces Configuration" description="Toggle interface links up or down to configure routing paths.">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200/50 dark:divide-slate-800/50 text-left text-xs font-mono">
-                <thead className="bg-slate-50/50 dark:bg-slate-900/50">
-                  <tr>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Port Name</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Operational Status</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Speed</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200/40 dark:divide-slate-800/40 bg-transparent text-slate-700 dark:text-slate-300">
-                  {Object.entries(device.config.interfaces || {}).map(([key, port]) => (
-                    <tr key={key}>
-                      <td className="px-6 py-4 font-bold">{key}</td>
-                      <td className="px-6 py-4">
-                        <StatusBadge status={port.enabled ? 'online' : 'offline'} />
-                      </td>
-                      <td className="px-6 py-4">{port.speed}</td>
-                      <td className="px-6 py-4">
-                        <Button
-                          variant="outline"
-                          onClick={() => handleToggleInterface(key)}
-                          className="text-[10px] py-1 px-2.5"
-                        >
-                          {port.enabled ? 'Disable Interface' : 'Enable Interface'}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-
-        {activeTab === 'policies' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <div className="text-left">
-                <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Global Security Policies</h4>
-                <p className="text-xs text-slate-400">Ordered access rules matching zones, services, and permits.</p>
-              </div>
-              {!isReadOnly && (
-                <Button variant="primary" onClick={() => setIsAddPolicyOpen(true)}>
-                  <Plus className="h-4 w-4 mr-1.5" /> Add Security Rule
-                </Button>
-              )}
-            </div>
-
-            <Card className="p-0 overflow-hidden">
-              <Table
-                columns={[
-                  { header: 'Policy Name', accessor: 'name', sortable: true },
-                  { header: 'Source Zone', accessor: 'srcZone' },
-                  { header: 'Dest Zone', accessor: 'destZone' },
-                  { header: 'Service', accessor: 'service' },
-                  {
-                    header: 'Action',
-                    accessor: (row: SecurityRule) => (
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                        row.action === 'permit' 
-                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400' 
-                          : 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-400'
-                      }`}>
-                        {row.action}
-                      </span>
-                    )
-                  },
-                  {
-                    header: 'Status',
-                    accessor: (row: SecurityRule) => (
-                      <button
-                        onClick={() => handleTogglePolicy(row.id)}
-                        className={`text-[10px] font-bold px-2 py-1 border rounded-lg ${
-                          row.enabled 
-                            ? 'bg-brand-500/10 border-brand-500/20 text-brand-500' 
-                            : 'bg-slate-100 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {row.enabled ? 'ENABLED' : 'DISABLED'}
-                      </button>
-                    )
-                  },
-                  {
-                    header: 'Actions',
-                    accessor: (row: SecurityRule) => (
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleDeletePolicy(row.id)}
-                        className="text-rose-500 hover:text-rose-700 p-1 h-8 w-8 flex items-center justify-center"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    ),
-                    className: 'text-right'
-                  }
-                ]}
-                data={policies}
-              />
-            </Card>
-          </div>
-        )}
-
-        {activeTab === 'nat' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <div className="text-left">
-                <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Destination NAT (Port Forwarding)</h4>
-                <p className="text-xs text-slate-400">Map inbound WAN traffic rules to internal host services.</p>
-              </div>
-              {!isReadOnly && (
-                <Button variant="primary" onClick={() => setIsAddNatOpen(true)}>
-                  <Plus className="h-4 w-4 mr-1.5" /> Add NAT Binding
-                </Button>
-              )}
-            </div>
-
-            <Card className="p-0 overflow-hidden">
-              <Table
-                columns={[
-                  { header: 'Rule Name', accessor: 'name', sortable: true },
-                  { header: 'Original Port', accessor: 'originalPort' },
-                  { header: 'Translated Port', accessor: 'translatedPort' },
-                  { header: 'Internal IP Target', accessor: 'translatedAddress', className: 'font-mono' },
-                  {
-                    header: 'Status',
-                    accessor: (row: NatRule) => (
-                      <button
-                        onClick={() => handleToggleNat(row.id)}
-                        className={`text-[10px] font-bold px-2 py-1 border rounded-lg ${
-                          row.enabled 
-                            ? 'bg-brand-500/10 border-brand-500/20 text-brand-500' 
-                            : 'bg-slate-100 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {row.enabled ? 'ACTIVE' : 'DISABLED'}
-                      </button>
-                    )
-                  },
-                  {
-                    header: 'Actions',
-                    accessor: (row: NatRule) => (
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleDeleteNat(row.id)}
-                        className="text-rose-500 hover:text-rose-700 p-1 h-8 w-8 flex items-center justify-center"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    ),
-                    className: 'text-right'
-                  }
-                ]}
-                data={natRules}
-              />
-            </Card>
-          </div>
-        )}
-
-        {activeTab === 'vpn' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <div className="text-left">
-                <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Site-to-Site IPSec VPN Tunnels</h4>
-                <p className="text-xs text-slate-400">Establish secure cryptographic links to remote campus branches.</p>
-              </div>
-              {!isReadOnly && (
-                <Button variant="primary" onClick={() => setIsAddVpnOpen(true)}>
-                  <Plus className="h-4 w-4 mr-1.5" /> Establish Tunnel
-                </Button>
-              )}
-            </div>
-
-            <Card className="p-0 overflow-hidden">
-              <Table
-                columns={[
-                  { header: 'Tunnel Name', accessor: 'name', sortable: true },
-                  { header: 'Remote Gateway', accessor: 'remotePeer', className: 'font-mono' },
-                  { header: 'Local Gateway', accessor: 'localAddress', className: 'font-mono' },
-                  {
-                    header: 'Tunnel Link',
-                    accessor: (row: VpnTunnel) => <StatusBadge status={row.status === 'up' && row.enabled ? 'online' : 'offline'} />
-                  },
-                  {
-                    header: 'Actions',
-                    accessor: (row: VpnTunnel) => (
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleDeleteVpn(row.id)}
-                        className="text-rose-500 hover:text-rose-700 p-1 h-8 w-8 flex items-center justify-center"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    ),
-                    className: 'text-right'
-                  }
-                ]}
-                data={vpnTunnels}
-              />
-            </Card>
-          </div>
-        )}
-
-        {activeTab === 'dhcp' && (
-          <Card title="Active DHCP Address Lease Allocations" description="Verify client addresses assigned dynamically on the trunk networks.">
-            <Table
-              columns={[
-                { header: 'Client Hostname', accessor: 'clientName', sortable: true },
-                { header: 'Assigned IP', accessor: 'ipAddress', className: 'font-mono' },
-                { header: 'MAC Address', accessor: 'macAddress', className: 'font-mono' },
-                { header: 'VLAN Index', accessor: 'vlanId' },
-                { header: 'Lease Expiry', accessor: 'leaseTime' }
-              ]}
-              data={firewallDhcpLeases}
-            />
-          </Card>
-        )}
-
-        {activeTab === 'dns' && (
-          <Card title="Global Domain Name Service (DNS)" description="Configure active fallback lookup domains for clients:">
-            <div className="space-y-4 text-left max-w-sm">
-              <div className="space-y-2">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Primary Server</span>
-                <input
-                  type="text"
-                  value={device.config.dnsServers?.[0] || '1.1.1.1'}
-                  onChange={async (e) => {
-                    const servers = [...(device.config.dnsServers || ['1.1.1.1', '8.8.8.8'])];
-                    servers[0] = e.target.value;
-                    await commitFirewallConfig('Update Primary DNS Server', { dnsServers: servers });
-                  }}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
-                />
-              </div>
-              <div className="space-y-2">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Secondary Server</span>
-                <input
-                  type="text"
-                  value={device.config.dnsServers?.[1] || '8.8.8.8'}
-                  onChange={async (e) => {
-                    const servers = [...(device.config.dnsServers || ['1.1.1.1', '8.8.8.8'])];
-                    servers[1] = e.target.value;
-                    await commitFirewallConfig('Update Secondary DNS Server', { dnsServers: servers });
-                  }}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
-                />
-              </div>
-            </div>
-          </Card>
-        )}
-
-        {activeTab === 'routing' && (
-          <Card title="Desired Static Routing Entries" description="Configure routes map targeting subnets and gateways.">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200/50 dark:divide-slate-800/50 text-left text-xs font-mono">
-                <thead className="bg-slate-50/50 dark:bg-slate-900/50">
-                  <tr>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Destination IP / Mask</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Next-Hop Gateway</th>
-                    <th className="px-6 py-3 text-slate-400 uppercase tracking-wider">Interface Link</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200/40 dark:divide-slate-800/40 bg-transparent text-slate-700 dark:text-slate-300">
-                  {(device.config as any).routingTable?.map((route: any, idx: number) => (
-                    <tr key={idx}>
-                      <td className="px-6 py-4 font-bold">{route.destination}</td>
-                      <td className="px-6 py-4">{route.gateway}</td>
-                      <td className="px-6 py-4">{route.interface}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-
-        {activeTab === 'logs' && (
-          <Card title="System Firewall Syslog Logs" description="Threat inspection logs and blocked packets notifications stream:">
-            <div className="space-y-3 text-left">
-              {syslogAlerts.length === 0 ? (
-                <p className="text-xs text-slate-400 font-medium text-center py-6">No threat alerts registered in syslog queue.</p>
-              ) : (
-                syslogAlerts.map(alert => (
-                  <div key={alert.id} className="p-3 bg-slate-500/5 border border-slate-200/10 rounded-xl font-mono text-xs flex gap-2">
-                    <span className="text-slate-400 shrink-0 select-none">[{new Date(alert.timestamp).toLocaleTimeString()}]</span>
-                    <span className={`font-bold shrink-0 ${alert.severity === 'critical' ? 'text-rose-500' : 'text-amber-500'}`}>
-                      {alert.severity.toUpperCase()}:
-                    </span>
-                    <span className="text-slate-700 dark:text-slate-300">{alert.message}</span>
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-left">
+              <Card title="Threat Protection status" description="Unified Intrusion Engine stats">
+                <div className="flex items-center space-x-3.5 mt-3">
+                  <div className="h-12 w-12 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="h-6 w-6" />
                   </div>
-                ))
-              )}
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">IPS Shield Active</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Signature DB: v2026.07.12</p>
+                  </div>
+                </div>
+              </Card>
+
+              <Card title="Active Flow Sessions" description="Total tracked connection flows">
+                <div className="mt-3">
+                  <h3 className="text-2xl font-extrabold font-mono text-slate-900 dark:text-white">
+                    {sessionsList.length}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1 flex items-center">
+                    <ArrowUpRight className="h-4 w-4 text-emerald-500 mr-1" />
+                    Last Poll: {telemetry.last_poll ? new Date(telemetry.last_poll).toLocaleTimeString() : 'N/A'}
+                  </p>
+                </div>
+              </Card>
+
+              <Card title="Hardware Health Status" description="Collector health telemetry">
+                <div className="mt-3 flex items-center justify-between text-xs font-semibold">
+                  <div>
+                    <p className="text-slate-400">Node CPU</p>
+                    <p className="text-slate-700 dark:text-slate-300 mt-0.5">{device.cpuUsage}%</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-400">Memory</p>
+                    <p className="text-slate-700 dark:text-slate-300 mt-0.5">{device.memoryUsage}%</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-400">Uptime</p>
+                    <p className="text-slate-700 dark:text-slate-300 mt-0.5">{device.uptime}</p>
+                  </div>
+                </div>
+              </Card>
+
+              <Card title="Metadata Schema" description="Telemetry descriptors version">
+                <div className="mt-3 text-xs font-semibold space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-450">Schema Type</span>
+                    <span className="text-slate-800 dark:text-slate-200">{telemetry.schema || 'firewall-session-v1'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-450">Version</span>
+                    <span className="text-slate-800 dark:text-slate-200">v{telemetry.version || '1'}</span>
+                  </div>
+                </div>
+              </Card>
+            </div>
+
+            <Card title="Collector Info & Diagnostics" description="Read-only background task state:">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-xs text-left font-semibold">
+                <div>
+                  <span className="text-slate-400">Collector Engine</span>
+                  <p className="text-slate-850 dark:text-slate-200 mt-1">{device.collector?.name || 'SRXCollector'}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400">Device Family</span>
+                  <p className="text-slate-850 dark:text-slate-200 mt-1">{device.collector?.device_family || 'SRX'}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400">Commands Executed</span>
+                  <p className="text-slate-850 dark:text-slate-200 mt-1">{device.collector?.commands_executed || 0}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400">SSH Latency</span>
+                  <p className="text-slate-850 dark:text-slate-200 mt-1">{device.performance?.current?.ssh_latency_ms || 12} ms</p>
+                </div>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Tab 2: Interfaces */}
+        {activeTab === 'interfaces' && (
+          <Card title="Firewall Interface Status Roster" description="terse/extensive interfaces parsed from JunOS:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Interface Name</th>
+                    <th className="px-4 py-2.5 text-left">Admin State</th>
+                    <th className="px-4 py-2.5 text-left">Link State</th>
+                    <th className="px-4 py-2.5 text-left">IP Address</th>
+                    <th className="px-4 py-2.5 text-right">Errors</th>
+                    <th className="px-4 py-2.5 text-right">Drops</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                  {interfacesList.map((i: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-500/5">
+                      <td className="px-4 py-2.5 font-bold">{i.interface}</td>
+                      <td className="px-4 py-2.5"><StatusBadge status={i.admin === 'up' ? 'online' : 'offline'} label={i.admin} /></td>
+                      <td className="px-4 py-2.5"><StatusBadge status={i.link === 'up' ? 'online' : 'offline'} label={i.link} /></td>
+                      <td className="px-4 py-2.5 font-mono">{i.ip || 'N/A'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{i.errors || 0}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{i.drops || 0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </Card>
         )}
 
-        {activeTab === 'backup' && (
-          <Card title="Restore Desired configuration Snapshots" description="Lists backups historical snapshots. Compare and restore previous state configurations:">
-            <div className="space-y-5 text-left">
-              <div className="flex items-center gap-2 max-w-md">
+        {/* Tab 3: Live Sessions */}
+        {activeTab === 'live-sessions' && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <div className="relative flex-1 w-full">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Backup description reason..."
-                  value={backupReason}
-                  onChange={(e) => setBackupReason(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
+                  placeholder="Search live sessions by IP address or policy name..."
+                  value={sessionSearch}
+                  onChange={(e) => setSessionSearch(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
                 />
-                <Button variant="primary" onClick={handleBackup} isLoading={isBackingUp} className="text-xs">
-                  Create Snapshot
-                </Button>
               </div>
+              <select
+                value={sessionProtoFilter}
+                onChange={(e) => setSessionProtoFilter(e.target.value)}
+                className="px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full sm:w-40"
+              >
+                <option value="all">All Protocols</option>
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+                <option value="icmp">ICMP</option>
+              </select>
+            </div>
 
-              {backupsList.length === 0 ? (
-                <p className="text-xs text-slate-400 font-medium">No configuration snapshots backups available.</p>
-              ) : (
-                <div className="space-y-3">
-                  {backupsList.map(bak => (
-                    <div key={bak.id} className="p-3.5 bg-slate-500/5 border border-slate-200/10 rounded-xl flex items-center justify-between gap-3 text-xs font-mono">
-                      <div>
-                        <p className="text-[10px] text-slate-400">{new Date(bak.timestamp).toLocaleString()}</p>
-                        <p className="font-sans font-medium text-slate-700 dark:text-slate-300">{bak.reason}</p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        onClick={() => handleRollback(bak.id)}
-                        className="text-[10px] px-2.5 py-1"
-                      >
-                        Restore State
-                      </Button>
-                    </div>
+            <Card title="Active Firewall Session Table" description="Parsed security flow session output:">
+              <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60 max-h-[500px]">
+                <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                  <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300 sticky top-0">
+                    <tr>
+                      <th className="px-4 py-2.5 text-left">Session ID</th>
+                      <th className="px-4 py-2.5 text-left">Source Endpoint</th>
+                      <th className="px-4 py-2.5 text-left">Destination</th>
+                      <th className="px-4 py-2.5 text-left">Protocol</th>
+                      <th className="px-4 py-2.5 text-left">Policy</th>
+                      <th className="px-4 py-2.5 text-left">State</th>
+                      <th className="px-4 py-2.5 text-right">Packets (In/Out)</th>
+                      <th className="px-4 py-2.5 text-right">Bytes (In/Out)</th>
+                      <th className="px-4 py-2.5 text-right">Timeout</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                    {filteredSessions.map((s: any) => (
+                      <tr key={s.session_id} className="hover:bg-slate-500/5">
+                        <td className="px-4 py-2.5 font-bold font-mono">{s.session_id}</td>
+                        <td className="px-4 py-2.5 font-mono">{s.source_ip}:{s.source_port}</td>
+                        <td className="px-4 py-2.5 font-mono">{s.destination_ip}:{s.destination_port}</td>
+                        <td className="px-4 py-2.5"><span className="uppercase px-1.5 py-0.5 rounded bg-slate-500/10 text-[10px] font-bold">{s.protocol}</span></td>
+                        <td className="px-4 py-2.5 font-semibold text-slate-800 dark:text-slate-250">{s.policy_name}</td>
+                        <td className="px-4 py-2.5 font-bold text-emerald-500">{s.state}</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{s.packets_in} / {s.packets_out}</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{formatBytes(s.bytes_in)} / {formatBytes(s.bytes_out)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{s.timeout}s</td>
+                      </tr>
+                    ))}
+                    {filteredSessions.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="px-4 py-8 text-center text-slate-400">No matching active sessions.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Tab 4: Connected Clients */}
+        {activeTab === 'connected-clients' && (
+          <div className="space-y-4">
+            <div className="relative w-full">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search connected correlated clients by hostname or IP..."
+                value={clientSearch}
+                onChange={(e) => setClientSearch(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
+              />
+            </div>
+
+            <Card title="Correlated Clients Network Map" description="Topology path correlation: Client -> AP -> Switch Port -> Switch -> Firewall">
+              <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+                <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                  <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-2.5 text-left">Client IP / Name</th>
+                      <th className="px-4 py-2.5 text-left">Access Point</th>
+                      <th className="px-4 py-2.5 text-left">Switch Uplink</th>
+                      <th className="px-4 py-2.5 text-left">Switch Port</th>
+                      <th className="px-4 py-2.5 text-center">Active Sessions</th>
+                      <th className="px-4 py-2.5 text-right">Upload</th>
+                      <th className="px-4 py-2.5 text-right">Download</th>
+                      <th className="px-4 py-2.5 text-left">Applied Policy</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                    {filteredClients.map((c: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-slate-500/5">
+                        <td className="px-4 py-2.5 font-semibold text-left">
+                          <span className="font-mono block">{c.client_ip}</span>
+                          <span className="text-[10px] text-slate-450 block">{c.client_name}</span>
+                        </td>
+                        <td className="px-4 py-2.5 font-bold text-slate-750 dark:text-slate-300">{c.ap_name}</td>
+                        <td className="px-4 py-2.5 font-medium text-indigo-500">{c.switch_name}</td>
+                        <td className="px-4 py-2.5 font-mono">{c.switch_port}</td>
+                        <td className="px-4 py-2.5 text-center font-bold font-mono text-cyan-500">{c.sessions_count}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-emerald-500">{formatBytes(c.upload)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-blue-500">{formatBytes(c.download)}</td>
+                        <td className="px-4 py-2.5"><span className="px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-500 font-bold">{c.policy}</span></td>
+                      </tr>
+                    ))}
+                    {filteredClients.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-8 text-center text-slate-400">No correlated clients detected.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Tab 5: Top Destinations */}
+        {activeTab === 'top-destinations' && (
+          <Card title="Top Destination Targets" description="Aggregated sessions grouped by target destination endpoint:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Destination IP</th>
+                    <th className="px-4 py-2.5 text-center">Connections Count</th>
+                    <th className="px-4 py-2.5 text-right">Aggregate Traffic Volume</th>
+                    <th className="px-4 py-2.5 text-left">Protocol Mix</th>
+                    <th className="px-4 py-2.5 text-left">Top Active Source Clients</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-left">
+                  {analytics.top_destinations.map((d: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-500/5">
+                      <td className="px-4 py-2.5 font-bold font-mono">{d.destination_ip}</td>
+                      <td className="px-4 py-2.5 text-center font-bold text-cyan-500 font-mono">{d.connection_count}</td>
+                      <td className="px-4 py-2.5 text-right font-bold font-mono text-emerald-500">{formatBytes(d.total_bytes)}</td>
+                      <td className="px-4 py-2.5 font-mono">
+                        {Object.entries(d.protocol_distribution || {}).map(([p, count]: any) => (
+                          <span key={p} className="inline-block mr-2 uppercase text-[9px] font-bold bg-slate-500/10 px-1 py-0.5 rounded">
+                            {p}: {count}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-slate-450">{d.top_clients?.join(', ') || 'N/A'}</td>
+                    </tr>
                   ))}
+                  {analytics.top_destinations.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-8 text-center text-slate-400">No destination telemetry cached.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {/* Tab 6: Top Applications */}
+        {activeTab === 'top-applications' && (
+          <Card title="Traffic Application Distribution" description="Aggregated session totals mapped by Application Port Detector:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Application Name</th>
+                    <th className="px-4 py-2.5 text-center">Session Count</th>
+                    <th className="px-4 py-2.5 text-right">Data Volume</th>
+                    <th className="px-4 py-2.5 text-right">Packet Count</th>
+                    <th className="px-4 py-2.5 text-left">Volume Share Indicator</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-left">
+                  {analytics.applications.map((app: any, idx: number) => {
+                    const maxBytes = Math.max(...analytics.applications.map((a: any) => a.bytes)) || 1;
+                    const percent = Math.min(100, Math.round((app.bytes / maxBytes) * 100));
+                    return (
+                      <tr key={idx} className="hover:bg-slate-500/5">
+                        <td className="px-4 py-2.5 font-bold text-slate-800 dark:text-slate-250 flex items-center">
+                          <div className="h-2 w-2 rounded-full bg-brand-500 mr-2" />
+                          {app.application}
+                        </td>
+                        <td className="px-4 py-2.5 text-center font-bold text-cyan-500 font-mono">{app.session_count}</td>
+                        <td className="px-4 py-2.5 text-right font-bold font-mono text-emerald-500">{formatBytes(app.bytes)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{app.packets}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="w-full bg-slate-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                            <div className="bg-brand-500 h-full rounded-full" style={{ width: `${percent}%` }} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {/* Tab 7: Bandwidth */}
+        {activeTab === 'bandwidth' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
+            <Card title="Upload / Download Totals" className="lg:col-span-1 flex flex-col justify-between">
+              <div className="space-y-4">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Aggregate Throughput</span>
+                  <h3 className="text-3xl font-extrabold font-mono text-slate-900 dark:text-white mt-1">
+                    {formatBytes(analytics.bandwidth.total_throughput_bytes)}
+                  </h3>
                 </div>
-              )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
+                    <span className="text-[9px] font-bold text-slate-450 uppercase flex items-center gap-1">
+                      <ArrowUpRight className="h-3.5 w-3.5 text-emerald-500" /> Upload (In)
+                    </span>
+                    <span className="text-sm font-bold font-mono text-emerald-500 mt-1 block">
+                      {formatBytes(analytics.bandwidth.total_upload_bytes)}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-blue-500/5 border border-blue-500/10 rounded-xl">
+                    <span className="text-[9px] font-bold text-slate-450 uppercase flex items-center gap-1">
+                      <ArrowDownRight className="h-3.5 w-3.5 text-blue-500" /> Download (Out)
+                    </span>
+                    <span className="text-sm font-bold font-mono text-blue-500 mt-1 block">
+                      {formatBytes(analytics.bandwidth.total_download_bytes)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card title="Top Client Bandwidth Usage" className="lg:col-span-2">
+              <div className="space-y-3.5 mt-2">
+                {analytics.bandwidth.client_bandwidth_usage.slice(0, 5).map((u: any, idx: number) => {
+                  const maxTotal = Math.max(...analytics.bandwidth.client_bandwidth_usage.map((cl: any) => cl.total)) || 1;
+                  const percent = Math.round((u.total / maxTotal) * 100);
+                  return (
+                    <div key={idx} className="space-y-1 text-xs">
+                      <div className="flex justify-between font-semibold">
+                        <span className="font-mono">{u.client_ip}</span>
+                        <span className="font-mono text-slate-450">{formatBytes(u.total)} (↑{formatBytes(u.upload)} / ↓{formatBytes(u.download)})</span>
+                      </div>
+                      <div className="w-full bg-slate-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                        <div className="bg-brand-500 h-full rounded-full" style={{ width: `${percent}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {analytics.bandwidth.client_bandwidth_usage.length === 0 && (
+                  <div className="text-slate-400 py-8 text-center">No bandwidth metrics tracked yet.</div>
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Tab 8: DNS Activity */}
+        {activeTab === 'dns-activity' && (
+          <Card title="DNS Server Query Logger" description="Aggregated UDP/TCP 53 DNS mappings:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Client IP</th>
+                    <th className="px-4 py-2.5 text-left">Resolved DNS Target Server</th>
+                    <th className="px-4 py-2.5 text-center">Query Count</th>
+                    <th className="px-4 py-2.5 text-right">Data Exchanged</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-left">
+                  {analytics.dns.map((dns: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-500/5">
+                      <td className="px-4 py-2.5 font-bold font-mono">{dns.client_ip}</td>
+                      <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-slate-200">{dns.dns_server}</td>
+                      <td className="px-4 py-2.5 text-center font-bold font-mono text-cyan-500">{dns.query_count}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{formatBytes(dns.bytes)}</td>
+                    </tr>
+                  ))}
+                  {analytics.dns.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-8 text-center text-slate-400">No DNS sessions logged.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </Card>
         )}
 
-        {activeTab === 'firmware' && (
-          <Card title="JunOS Active Firmware baseline" description="Verify device firmware update settings:">
-            <div className="space-y-4 text-left max-w-sm">
-              <div className="grid grid-cols-2 text-xs font-mono">
-                <span className="text-slate-500">Current version:</span>
-                <span className="text-slate-800 dark:text-slate-200 text-right font-bold">{device.version}</span>
-              </div>
-              <div className="pt-2">
-                <Button variant="outline" onClick={handleUpgradeFirmware} isLoading={isUpgrading} className="flex items-center gap-1.5">
-                  <RefreshCw className="h-4 w-4" /> Trigger Firmware Upgrade
-                </Button>
-              </div>
+        {/* Tab 9: Routes */}
+        {activeTab === 'routes' && (
+          <Card title="Active Routing Table" description="show route output parsed dynamically:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Destination Subnet</th>
+                    <th className="px-4 py-2.5 text-left">Gateway Gateway</th>
+                    <th className="px-4 py-2.5 text-left">Egress Interface</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-left">
+                  {routesList.map((r: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-500/5">
+                      <td className="px-4 py-2.5 font-bold font-mono">{r.destination}</td>
+                      <td className="px-4 py-2.5 font-mono">{r.gateway}</td>
+                      <td className="px-4 py-2.5 font-bold text-indigo-500 font-mono">{r.interface}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </Card>
         )}
+
+        {/* Tab 10: Security Policies */}
+        {activeTab === 'policies' && (
+          <Card title="Active Security Policies" description="show security policies configurations parsed:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Policy Rule Name</th>
+                    <th className="px-4 py-2.5 text-left">From Zone</th>
+                    <th className="px-4 py-2.5 text-left">To Zone</th>
+                    <th className="px-4 py-2.5 text-left">Service</th>
+                    <th className="px-4 py-2.5 text-left">Security Action</th>
+                    <th className="px-4 py-2.5 text-left">State</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-left">
+                  {policiesList.map((p: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-500/5">
+                      <td className="px-4 py-2.5 font-bold">{p.policyName}</td>
+                      <td className="px-4 py-2.5 uppercase font-mono text-[10px] font-bold text-slate-450">{p.fromZone}</td>
+                      <td className="px-4 py-2.5 uppercase font-mono text-[10px] font-bold text-slate-450">{p.toZone}</td>
+                      <td className="px-4 py-2.5 font-mono">Any</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`px-2 py-0.5 rounded font-bold uppercase text-[9px] ${
+                          p.state === 'enabled' || p.state === 'active'
+                            ? 'bg-emerald-500/10 text-emerald-500'
+                            : 'bg-rose-500/10 text-rose-500'
+                        }`}>
+                          {p.state === 'enabled' || p.state === 'active' ? 'Permit' : 'Deny'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5"><StatusBadge status={p.state === 'enabled' || p.state === 'active' ? 'online' : 'offline'} label={p.state} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {/* Tab 11: Events */}
+        {activeTab === 'events' && (
+          <Card title="Rolling Security & Firewall Events Log" description="Delta-based security, session state modifications and anomaly alerts:">
+            <div className="overflow-x-auto rounded-xl border border-slate-200/60 dark:border-slate-800/60 max-h-[400px]">
+              <table className="min-w-full divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs text-slate-700 dark:text-slate-350">
+                <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Timestamp</th>
+                    <th className="px-4 py-2.5 text-left">Event Category</th>
+                    <th className="px-4 py-2.5 text-left">Details Message</th>
+                    <th className="px-4 py-2.5 text-left">Severity</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-left">
+                  {analytics.events.slice().reverse().map((e: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-500/5">
+                      <td className="px-4 py-2.5 font-mono text-slate-450">{new Date(e.timestamp).toLocaleString()}</td>
+                      <td className="px-4 py-2.5 font-bold flex items-center">
+                        <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 mr-1.5" />
+                        {e.event}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-850 dark:text-slate-200">{e.message}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${
+                          e.severity === 'critical' ? 'bg-red-500/10 text-red-500' :
+                          e.severity === 'warning' ? 'bg-amber-500/10 text-amber-500' : 'bg-slate-500/10 text-slate-450'
+                        }`}>
+                          {e.severity}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {analytics.events.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-8 text-center text-slate-400">No events logged yet. Waiting for polling cycles...</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
       </div>
-
-      {/* Policies Add wizard */}
-      <Wizard
-        isOpen={isAddPolicyOpen}
-        onClose={() => setIsAddPolicyOpen(false)}
-        title="Create Firewall Security Rule"
-        steps={addPolicySteps}
-        onFinish={handleAddPolicy}
-        finishText="Apply Security Rule"
-      />
-
-      {/* NAT Add Modal */}
-      <Modal
-        isOpen={isAddNatOpen}
-        onClose={() => setIsAddNatOpen(false)}
-        title="Add NAT Port Forwarding"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setIsAddNatOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleAddNat}>Create NAT Binding</Button>
-          </>
-        }
-      >
-        <div className="space-y-4 text-left font-sans">
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Rule Name</label>
-            <input
-              type="text"
-              placeholder="e.g. Inbound-Web"
-              value={natName}
-              onChange={(e) => setNatName(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-            />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">External Port</label>
-              <input
-                type="number"
-                value={natOrigPort}
-                onChange={(e) => setNatOrigPort(Number(e.target.value))}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Internal Port</label>
-              <input
-                type="number"
-                value={natTransPort}
-                onChange={(e) => setNatTransPort(Number(e.target.value))}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Internal Target Address</label>
-              <input
-                type="text"
-                placeholder="10.10.20.10"
-                value={natTransAddr}
-                onChange={(e) => setNatTransAddr(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
-              />
-            </div>
-          </div>
-        </div>
-      </Modal>
-
-      {/* VPN Add Modal */}
-      <Modal
-        isOpen={isAddVpnOpen}
-        onClose={() => setIsAddVpnOpen(false)}
-        title="Add IPSec VPN Tunnel"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setIsAddVpnOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleAddVpn}>Establish Connection</Button>
-          </>
-        }
-      >
-        <div className="space-y-4 text-left font-sans">
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Tunnel Name</label>
-            <input
-              type="text"
-              placeholder="e.g. Branch-B-IPSec"
-              value={vpnName}
-              onChange={(e) => setVpnName(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Remote Peer Gateway</label>
-              <input
-                type="text"
-                value={vpnRemotePeer}
-                onChange={(e) => setVpnRemotePeer(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Local Interface Address</label>
-              <input
-                type="text"
-                value={vpnLocalAddr}
-                onChange={(e) => setVpnLocalAddr(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
-              />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">IPSec Pre-Shared Key (PSK)</label>
-            <input
-              type="password"
-              placeholder="••••••••••••••••"
-              value={vpnPresharedKey}
-              onChange={(e) => setVpnPresharedKey(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono"
-            />
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 };

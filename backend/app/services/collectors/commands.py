@@ -9,6 +9,7 @@ SRX_COMMANDS = {
     "zones": "show security zones",
     "policies": "show security policies",
     "sessions": "show security flow session summary",
+    "sessions_details": "show security flow session | no-more",
     "arp": "show arp"
 }
 

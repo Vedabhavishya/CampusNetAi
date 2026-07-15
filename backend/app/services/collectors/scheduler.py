@@ -24,9 +24,11 @@ async def start_scheduler():
 
     print(f"[Scheduler] Starting polling scheduler with interval: {poll_interval}s", flush=True)
 
+    cycle_count = 0
     while True:
         cycle_start_time = time.time()
-        print("[Scheduler] Starting polling cycle...", flush=True)
+        cycle_count += 1
+        print(f"[Scheduler] Starting polling cycle #{cycle_count}...", flush=True)
         
         db = SessionLocal()
         try:
@@ -36,24 +38,91 @@ async def start_scheduler():
                     collector = collector_registry.get_collector(dev.type, dev.model)
                     
                     # 1. Collect
-                    if dev.type == "access_point":
-                        status_data = collector.collect_status(dev.ip_address, dev.mac_address, dev.config, device_id=dev.id, db=db)
+                    if dev.type == "firewall":
+                        # Multi-capability stateless firewall polling
+                        fast_data = collector.collect_fast()
+                        
+                        existing_data = telemetry_cache.get(dev.id) or {}
+                        if not existing_data or "inventory" not in existing_data:
+                            startup_data = collector.collect_startup()
+                        else:
+                            startup_data = {"inventory": existing_data["inventory"]}
+                            
+                        if cycle_count % 5 == 0 or not existing_data or "routes" not in existing_data.get("telemetry", {}):
+                            routes_data = collector.collect_routes()
+                        else:
+                            routes_data = {"telemetry": {"routes": existing_data["telemetry"].get("routes", [])}}
+                            
+                        if cycle_count % 10 == 0 or not existing_data or "policies" not in existing_data.get("telemetry", {}):
+                            policies_data = collector.collect_policies()
+                        else:
+                            policies_data = {
+                                "telemetry": {
+                                    "zones": existing_data["telemetry"].get("zones", []),
+                                    "policies": existing_data["telemetry"].get("policies", [])
+                                }
+                            }
+                            
+                        status_data = {**startup_data, **fast_data}
+                        status_data["telemetry"] = {
+                            **status_data.get("telemetry", {}),
+                            **routes_data.get("telemetry", {}),
+                            **policies_data.get("telemetry", {})
+                        }
                     else:
                         status_data = collector.collect_status(dev.ip_address, dev.mac_address, dev.config, device_id=dev.id)
                     
-                    # Correct collector metadata dynamically without modifying collector implementation
                     if "collector" in status_data and isinstance(status_data["collector"], dict):
                         status_data["collector"]["name"] = collector.__class__.__name__
 
-                    # 2. Correlate (APs only, linking EX2300 switch ports and PoE details)
-                    if dev.type == "access_point":
-                        switch_cached = telemetry_cache.get("dev-as-1") or {}
-                        if "telemetry" in status_data:
-                            status_data["telemetry"] = NetworkCorrelator.correlate_wireless(
-                                status_data["telemetry"], 
-                                switch_cached
+                    # 2. Correlate
+                    if dev.type == "firewall":
+                        if "telemetry" in status_data and status_data["telemetry"] is not None:
+                            telemetry = status_data["telemetry"]
+                            ap1 = telemetry_cache.get("dev-ap-1") or {}
+                            ap2 = telemetry_cache.get("dev-ap-2") or {}
+                            outdoor = telemetry_cache.get("dev-ap-3") or {}
+                            switch = telemetry_cache.get("dev-as-1") or {}
+                            cached_devs = {
+                                "dev-ap-1": ap1,
+                                "dev-ap-2": ap2,
+                                "dev-ap-3": outdoor,
+                                "dev-as-1": switch
+                            }
+                            sessions = telemetry.get("sessions", [])
+                            correlated = NetworkCorrelator.correlate_firewall_sessions(sessions, cached_devs)
+                            telemetry["correlated_sessions"] = correlated
+                            
+                            # Compute Firewall Analytics (Façade)
+                            from ..analytics.firewall_analytics import FirewallAnalytics
+                            f_analytics = FirewallAnalytics()
+                            prev_analytics = telemetry_cache.get("analytics_firewall") or {}
+                            prev_sessions = telemetry_cache.get("previous_firewall_sessions") or []
+                            
+                            analytics_result = f_analytics.analyze(
+                                current_sessions=sessions,
+                                previous_sessions=prev_sessions,
+                                interfaces=telemetry.get("interfaces", []),
+                                routes=telemetry.get("routes", []),
+                                previous_interfaces=prev_analytics.get("interfaces_prev"),
+                                previous_routes=prev_analytics.get("routes_prev"),
+                                previous_closed=prev_analytics.get("closed_sessions"),
+                                previous_events=prev_analytics.get("events")
                             )
-
+                            
+                            telemetry_cache.set("previous_firewall_sessions", sessions)
+                            analytics_result["interfaces_prev"] = telemetry.get("interfaces", [])
+                            analytics_result["routes_prev"] = telemetry.get("routes", [])
+                            telemetry_cache.set("analytics_firewall", analytics_result)
+                            
+                            # Version metadata injection
+                            telemetry["version"] = 1
+                            telemetry["last_poll"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            telemetry["collector"] = "srx300"
+                            telemetry["schema"] = "firewall-session-v1"
+                            telemetry["device_id"] = dev.id
+                            telemetry["site_id"] = "main-campus"
+                    
                     # 3. Validate
                     validate_telemetry(dev.type, status_data.get("telemetry", {}))
 

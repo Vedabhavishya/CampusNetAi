@@ -651,3 +651,26 @@ def apply_ai_insight(insight_id: str, db: Session = Depends(get_db), current_use
 
 # Import datetime for onboarding alerts timestamp
 from datetime import datetime
+
+@router.get("/firewall/analytics")
+def get_firewall_analytics(current_user: DbUser = Depends(get_current_user)):
+    """
+    Read-only cache-backed firewall analytics (never triggers SSH).
+    """
+    analytics = telemetry_cache.get("analytics_firewall")
+    if not analytics:
+        return {
+            "top_clients": [],
+            "top_destinations": [],
+            "bandwidth": {
+                "total_upload_bytes": 0,
+                "total_download_bytes": 0,
+                "total_throughput_bytes": 0,
+                "client_bandwidth_usage": []
+            },
+            "dns": [],
+            "applications": [],
+            "closed_sessions": [],
+            "events": []
+        }
+    return analytics
