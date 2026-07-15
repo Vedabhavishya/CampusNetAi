@@ -896,7 +896,7 @@ class CampusNetApi {
           } else {
             const conn = getApUplink(targetAp.name, targetAp.macAddress);
             if (conn) {
-              const portConfig = conn.switchDevice.config?.interfaces?.[conn.switchPort];
+              const portConfig = conn.switchDevice.config?.interfaces?.[conn.switchPort] as any;
               if (portConfig && portConfig.link === 'down') {
                 resolve({
                   text: `**${targetAp.name}** is unreachable because switch port **${conn.switchPort}** on **${conn.switchName}** is **DOWN**. This prevents heartbeats from completing.`,
@@ -939,7 +939,7 @@ class CampusNetApi {
             if (conn) {
               sw = conn.switchName;
               port = conn.switchPort;
-              const portConfig = conn.switchDevice.config?.interfaces?.[conn.switchPort];
+              const portConfig = conn.switchDevice.config?.interfaces?.[conn.switchPort] as any;
               if (portConfig && portConfig.poeWatts) {
                 watts = parseFloat(portConfig.poeWatts);
               } else if (portConfig && portConfig.poe) {
@@ -961,7 +961,7 @@ class CampusNetApi {
             const portStats = sw.telemetry?.port_statistics?.ports || {};
             Object.entries(portStats).forEach(([port, stats]: [string, any]) => {
               if (stats.last_flap && stats.last_flap !== 'Never' && !stats.last_flap.includes('days')) {
-                flapped_ports.push({ switch: sw.name, port, last_flap: stats.last_flap });
+                flappedPorts.push({ switch: sw.name, port, last_flap: stats.last_flap });
               }
             });
           });

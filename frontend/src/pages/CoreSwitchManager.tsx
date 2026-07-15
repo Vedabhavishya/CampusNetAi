@@ -91,7 +91,7 @@ export const CoreSwitchManager: React.FC = () => {
 
   // Dynamically filter vlan columns based on data availability
   const vlanColumns = useMemo(() => {
-    const cols = [
+    const cols: any[] = [
       { header: 'VLAN ID', accessor: 'id', sortable: true },
       { header: 'Profile Name', accessor: 'name', sortable: true },
     ];

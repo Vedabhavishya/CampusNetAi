@@ -5,9 +5,10 @@ import { DeviceStatus, DeviceType } from '../types';
 // 1. STATUS BADGE
 interface StatusBadgeProps {
   status: DeviceStatus | 'active' | 'inactive';
+  label?: string;
 }
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
+export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, label }) => {
   const getColors = () => {
     switch (status) {
       case 'online':
@@ -29,7 +30,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
         status === 'online' || status === 'active' ? 'bg-emerald-500' :
         status === 'warning' ? 'bg-amber-500' : 'bg-slate-400'
       }`} />
-      {status}
+      {label || status}
     </span>
   );
 };
