@@ -71,10 +71,15 @@ class SRXParser(BaseParser):
         if kernel_match:
             res["cpu"]["kernel"] = int(kernel_match.group(1))
 
-        # Memory utilization
+        # Memory utilization (Total memory 4096 MB Max 1352 MB used ( 33 percent))
         mem_util_match = re.search(r"Memory utilization\s+(\d+)\s+percent", chassis_out, re.IGNORECASE)
         if mem_util_match:
             res["memory"]["usage"] = int(mem_util_match.group(1))
+        else:
+            # Fallback to the RE memory line: "Total memory 4096 MB Max 1352 MB used ( 33 percent)"
+            re_mem_match = re.search(r"Total memory.*used\s*\(\s*(\d+)\s*percent\)", chassis_out, re.IGNORECASE)
+            if re_mem_match:
+                res["memory"]["usage"] = int(re_mem_match.group(1))
             
         total_mem_match = re.search(r"Total memory\s+(\d+)\s+MB", chassis_out, re.IGNORECASE)
         if total_mem_match:
@@ -93,11 +98,13 @@ class SRXParser(BaseParser):
             parts = line.split()
             if len(parts) >= 3 and ("up" in parts[1] or "down" in parts[1]):
                 iface_name = parts[0]
+                if "." not in iface_name:
+                    continue # Skip physical parent interfaces to show only sub-interfaces
                 admin_status = parts[1]
                 link_status = parts[2]
                 ip_addr = "N/A"
                 if len(parts) >= 5 and parts[3] == "inet":
-                    ip_addr = parts[4]
+                    ip_addr = parts[4].split('/')[0] # strip CIDR
                 
                 interfaces.append({
                     "interface": iface_name,

@@ -21,7 +21,7 @@ def seed_database(db: Session):
                 id="dev-fw-1",
                 name="srx300 firewall",
                 type="firewall",
-                ip_address="192.168.1.1",
+                ip_address="10.0.0.1",
                 mac_address="00:0B:82:11:A3:F1",
                 status="online",
                 model="Juniper SRX300",

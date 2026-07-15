@@ -155,14 +155,16 @@ class SRXCollector(BaseCollector):
                     source_port=s["source_port"],
                     destination_port=s["destination_port"],
                     protocol=s["protocol"],
-                    application="Other", # Classification done in detector layer later
+                    application="Other",
                     bytes_in=s["bytes_in"],
                     bytes_out=s["bytes_out"],
                     packets_in=s["packets_in"],
                     packets_out=s["packets_out"],
                     policy=s["policy_name"],
                     state=s["state"],
-                    timeout=s["timeout"]
+                    timeout=s["timeout"],
+                    ingress_interface=s.get("ingress_interface", "N/A"),
+                    egress_interface=s.get("egress_interface", "N/A")
                 ).to_dict())
                 
             cpu_usage = 100 - chassis["cpu"]["idle"]
@@ -188,25 +190,28 @@ class SRXCollector(BaseCollector):
     def collect_fast_mock(self) -> dict:
         """
         High fidelity mock fast telemetry generator featuring active client session paths.
+        Specifies only port 0 and port 4 as active (up/up) to match physical lab layout.
         """
         interfaces = [
-            {"interface": "ge-0/0/0.0", "admin": "up", "link": "up", "ip": "203.0.113.2"},
-            {"interface": "ge-0/0/1.0", "admin": "up", "link": "up", "ip": "192.168.30.1"},
-            {"interface": "ge-0/0/2.0", "admin": "up", "link": "up", "ip": "192.168.10.1"}
+            {"interface": "ge-0/0/0.0", "admin": "up", "link": "up", "ip": "203.0.113.2", "errors": 0, "drops": 0},
+            {"interface": "ge-0/0/1.0", "admin": "down", "link": "down", "ip": "", "errors": 0, "drops": 0},
+            {"interface": "ge-0/0/2.0", "admin": "down", "link": "down", "ip": "", "errors": 0, "drops": 0},
+            {"interface": "ge-0/0/3.0", "admin": "down", "link": "down", "ip": "", "errors": 0, "drops": 0},
+            {"interface": "ge-0/0/4.0", "admin": "up", "link": "up", "ip": "192.168.30.1", "errors": 0, "drops": 0}
         ]
         
         # Build mock sessions targeting active clients in DB
         sessions = [
             # POCO-X4-Pro-5G DNS Query
-            NormalizedSession(1001, "192.168.30.104", "8.8.8.8", 52010, 53, "udp", "DNS", 680, 960, 10, 12, "Allow-Web", "Active", 1792),
+            NormalizedSession(1001, "192.168.30.104", "8.8.8.8", 52010, 53, "udp", "DNS", 680, 960, 10, 12, "Allow-Web", "Active", 1792, "ge-0/0/4.0", "ge-0/0/0.0"),
             # POCO-X4-Pro-5G HTTPS web stream
-            NormalizedSession(1002, "192.168.30.104", "142.250.190.46", 52012, 443, "tcp", "HTTPS", 12000, 280000, 150, 220, "Allow-Web", "Active", 1800),
+            NormalizedSession(1002, "192.168.30.104", "142.250.190.46", 52012, 443, "tcp", "HTTPS", 12000, 280000, 150, 220, "Allow-Web", "Active", 1800, "ge-0/0/4.0", "ge-0/0/0.0"),
             # Veda-Bhavishya-s-M34 DNS Query
-            NormalizedSession(1003, "192.168.30.100", "1.1.1.1", 49102, 53, "udp", "DNS", 280, 320, 4, 4, "Allow-Web", "Active", 1798),
+            NormalizedSession(1003, "192.168.30.100", "1.1.1.1", 49102, 53, "udp", "DNS", 280, 320, 4, 4, "Allow-Web", "Active", 1798, "ge-0/0/4.0", "ge-0/0/0.0"),
             # Veda-Bhavishya-s-M34 Web request
-            NormalizedSession(1004, "192.168.30.100", "104.18.26.230", 49104, 443, "tcp", "HTTPS", 5400, 62000, 80, 110, "Allow-Web", "Active", 1800),
+            NormalizedSession(1004, "192.168.30.100", "104.18.26.230", 49104, 443, "tcp", "HTTPS", 5400, 62000, 80, 110, "Allow-Web", "Active", 1800, "ge-0/0/4.0", "ge-0/0/0.0"),
             # V2240 SSH connection
-            NormalizedSession(1005, "192.168.30.102", "192.168.30.1", 61004, 22, "tcp", "SSH", 3800, 4200, 45, 50, "Allow-Internal", "Active", 1800)
+            NormalizedSession(1005, "192.168.30.102", "192.168.30.1", 61004, 22, "tcp", "SSH", 3800, 4200, 45, 50, "Allow-Internal", "Active", 1800, "ge-0/0/4.0", "ge-0/0/0.0")
         ]
         
         return {

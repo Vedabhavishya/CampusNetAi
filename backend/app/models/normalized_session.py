@@ -16,6 +16,8 @@ class NormalizedSession:
     policy: str
     state: str
     timeout: int
+    ingress_interface: str = "N/A"
+    egress_interface: str = "N/A"
 
     def to_dict(self) -> dict:
         return asdict(self)

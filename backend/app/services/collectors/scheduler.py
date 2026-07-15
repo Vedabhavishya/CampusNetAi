@@ -33,6 +33,7 @@ async def start_scheduler():
         db = SessionLocal()
         try:
             devices = db.query(DbDevice).filter(DbDevice.type != "access_point").all()
+            print(f"[Scheduler] Devices fetched: {[d.id for d in devices]} (Cycle #{cycle_count})", flush=True)
             for dev in devices:
                 try:
                     collector = collector_registry.get_collector(dev.type, dev.model)

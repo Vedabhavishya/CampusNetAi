@@ -27,12 +27,12 @@ class SRXSessionParser:
                 policy_name = pol_match.group(1)
                 
             state = "Active"
-            state_match = re.search(r"State:\s+([^,\s]+)", header)
+            state_match = re.search(r"(?:Session State|State):\s*([^,\s]+)", header)
             if state_match:
                 state = state_match.group(1)
                 
             timeout = 0
-            timeout_match = re.search(r"Timeout:\s+(\d+)", header)
+            timeout_match = re.search(r"Timeout:\s*(\d+)", header)
             if timeout_match:
                 timeout = int(timeout_match.group(1))
                 
@@ -53,25 +53,26 @@ class SRXSessionParser:
                         dst_port = int(m.group(4))
                         protocol = m.group(5)
                     
-                    ing_match = re.search(r"Ingress:\s+([^,\s]+)", line)
+                    ing_match = re.search(r"(?:Ingress|If):\s*([^,\s]+)", line)
                     if ing_match:
                         ingress_iface = ing_match.group(1)
-                    egr_match = re.search(r"Egress:\s+([^,\s]+)", line)
-                    if egr_match:
-                        egress_iface = egr_match.group(1)
                         
-                    pkt_match = re.search(r"Packets:\s+(\d+)", line)
+                    pkt_match = re.search(r"(?:Packets|Pkts):\s*(\d+)", line)
                     if pkt_match:
                         pkts_in = int(pkt_match.group(1))
-                    byt_match = re.search(r"Bytes:\s+(\d+)", line)
+                    byt_match = re.search(r"Bytes:\s*(\d+)", line)
                     if byt_match:
                         bytes_in = int(byt_match.group(1))
                         
                 elif line.startswith("Out:"):
-                    pkt_match = re.search(r"Packets:\s+(\d+)", line)
+                    egr_match = re.search(r"(?:Egress|If):\s*([^,\s]+)", line)
+                    if egr_match:
+                        egress_iface = egr_match.group(1)
+                        
+                    pkt_match = re.search(r"(?:Packets|Pkts):\s*(\d+)", line)
                     if pkt_match:
                         pkts_out = int(pkt_match.group(1))
-                    byt_match = re.search(r"Bytes:\s+(\d+)", line)
+                    byt_match = re.search(r"Bytes:\s*(\d+)", line)
                     if byt_match:
                         bytes_out = int(byt_match.group(1))
                         
